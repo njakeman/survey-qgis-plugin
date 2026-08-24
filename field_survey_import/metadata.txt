@@ -1,0 +1,28 @@
+[general]
+name=Field Survey Import
+qgisMinimumVersion=3.28
+description=Import zip exports from the Field Survey app into styled QGIS layers with photo/audio popups.
+version=0.1.0
+author=Field Survey
+email=info@field.works
+
+about=Imports a Field Survey app export zip (session.geojson + photos + audio) into a GeoPackage
+    as Points/Paths/Boundaries layers, applies heading-aware symbology, and wires up photo/audio
+    popups. Offline only — the plugin makes no network requests. See the project's
+    survey-tool-qgis-plugin-handoff.md for the full data contract this plugin implements.
+
+tracker=https://github.com/field-works/survey-qgis-plugin/issues
+repository=https://github.com/field-works/survey-qgis-plugin
+
+hasProcessingProvider=yes
+
+tags=survey,gps,import,geojson,field survey,gpkg
+
+homepage=https://survey.field.works/
+category=Vector
+icon=resources/icon.svg
+experimental=True
+deprecated=False
+server=False
+
+changelog=0.1.0 - initial development version

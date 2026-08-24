@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Build/packaging output
+/dist/
+*.zip.tmp
+
+# QGIS scratch files sometimes dropped alongside test GeoPackages
+*.gpkg-shm
+*.gpkg-wal
+*.gpkg-journal
+
+# Editor/OS
+.vscode/
+.idea/
+Thumbs.db
+
+# sample.zip and the release plugin zip are intentionally tracked, not ignored
