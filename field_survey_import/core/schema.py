@@ -60,7 +60,13 @@ SURVEY_FIELDS: tuple[FieldDef, ...] = (
              "Free text. Empty string ('') is the no-note sentinel, not null."),
     FieldDef("photo", FieldType.STRING, True,
              "Bare filename inside the zip's photos/ dir, e.g. '<photoId>.jpg'. Join "
-             "on this literal value - never reconstruct as obs_id + '.jpg'."),
+             "on this literal value - never reconstruct as obs_id + '.jpg'. Legacy "
+             "mirror of photos[0].photo (handoff addendum) - photos is authoritative."),
+    FieldDef("photos", FieldType.JSON, True,
+             "JSON array of {photo, ref_photo} objects, one per photo on this "
+             "observation (handoff addendum - not in the original §3 table). "
+             "Absent/null/[] on old exports; reader.py synthesises a single-entry "
+             "tuple from the photo/ref_photo scalars in that case."),
     FieldDef("audio", FieldType.STRING, True,
              "Bare filename inside the zip's audio/ dir: '.webm' = Opus, '.m4a' = AAC."),
     FieldDef("audio_duration_ms", FieldType.INT64, True,
@@ -101,7 +107,14 @@ PLUGIN_FIELDS: tuple[FieldDef, ...] = (
              "survey_session.id - joins a feature back to fs_sessions without relying "
              "on the denormalised, non-unique session_name."),
     FieldDef("photo_path", FieldType.STRING, True,
-             "Path to the extracted photo, relative to the GeoPackage's directory."),
+             "Path to the FIRST extracted photo, relative to the GeoPackage's "
+             "directory - kept for the existing single-photo ExternalResource "
+             "form widget. photo_paths is authoritative for the full set."),
+    FieldDef("photo_paths", FieldType.JSON, True,
+             "JSON array of every extracted photo's path, relative to the "
+             "GeoPackage's directory, in the same order as the photos property."),
+    FieldDef("photo_count", FieldType.INT64, False,
+             "len(photo_paths). 0, never null, so it's directly filterable."),
     FieldDef("audio_path", FieldType.STRING, True,
              "Path to the extracted audio file, relative to the GeoPackage's directory."),
     FieldDef("revisit_state", FieldType.STRING, True,

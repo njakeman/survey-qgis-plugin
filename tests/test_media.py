@@ -1,15 +1,19 @@
+import io
+import zipfile
 from datetime import datetime, timezone
 
 import pytest
 
 from field_survey_import.core import media, reader
 from field_survey_import.core.errors import MediaJoinError
-from field_survey_import.core.model import Geometry, GeometryType, Observation
+from field_survey_import.core.model import Geometry, GeometryType, Observation, PhotoRef
 
 _DUMMY_TIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-def _dummy_obs(*, photo=None, audio=None, obs_id="OBS1"):
+def _dummy_obs(*, photo=None, photos=None, audio=None, obs_id="OBS1"):
+    if photos is None:
+        photos = (PhotoRef(photo=photo, ref_photo=None),) if photo is not None else ()
     return Observation(
         geometry=Geometry(type=GeometryType.POINT, coordinates=(0.0, 0.0)),
         obs_id=obs_id,
@@ -24,6 +28,7 @@ def _dummy_obs(*, photo=None, audio=None, obs_id="OBS1"):
         heading_accuracy_deg=None,
         note="",
         photo=photo,
+        photos=photos,
         audio=audio,
         audio_duration_ms=None,
         feature_layer=None,
@@ -45,11 +50,12 @@ def test_media_join_clean_on_sample(sample_zip):
     resolved_photo_count = 0
     resolved_audio_count = 0
     for obs in export.observations:
-        photo_ref, audio_ref = media.resolve_media(obs, sample_zip)
-        assert (photo_ref is not None) == (obs.photo is not None)
+        photo_refs, audio_ref = media.resolve_media(obs, sample_zip)
+        assert len(photo_refs) == len(obs.photos)
+        assert (bool(photo_refs)) == (obs.photo is not None)
         assert (audio_ref is not None) == (obs.audio is not None)
-        if photo_ref:
-            assert photo_ref.zip_entry == f"photos/{obs.photo}"
+        for photo_ref in photo_refs:
+            assert photo_ref.zip_entry == f"photos/{photo_ref.filename}"
             resolved_photo_count += 1
         if audio_ref:
             assert audio_ref.zip_entry == f"audio/{obs.audio}"
@@ -70,8 +76,7 @@ def test_media_join_is_by_property_value_not_obs_id(sample_zip):
     real_photo_obs = next(o for o in export.observations if o.photo is not None)
 
     fake = _dummy_obs(obs_id="NOT-THE-REAL-OBS-ID", photo=real_photo_obs.photo)
-    photo_ref, _ = media.resolve_media(fake, sample_zip)
-    assert photo_ref is not None
+    (photo_ref,), _ = media.resolve_media(fake, sample_zip)
     assert photo_ref.zip_entry == f"photos/{real_photo_obs.photo}"
 
 
@@ -85,9 +90,8 @@ def test_extract_media_writes_expected_files(sample_zip, tmp_path):
     export = reader.read_export(sample_zip)
     refs = set()
     for obs in export.observations:
-        photo_ref, audio_ref = media.resolve_media(obs, sample_zip)
-        if photo_ref:
-            refs.add(photo_ref)
+        photo_refs, audio_ref = media.resolve_media(obs, sample_zip)
+        refs.update(photo_refs)
         if audio_ref:
             refs.add(audio_ref)
 
@@ -97,3 +101,33 @@ def test_extract_media_writes_expected_files(sample_zip, tmp_path):
         assert path.exists()
         assert path.stat().st_size > 0
         assert path.is_relative_to(tmp_path)
+
+
+def test_media_join_resolves_all_photos_on_multi_photo_zip(multi_photo_zip):
+    export = reader.read_export(multi_photo_zip)
+    assert [len(o.photos) for o in export.observations] == [2, 4, 1]
+
+    total_photo_refs = 0
+    for obs in export.observations:
+        photo_refs, audio_ref = media.resolve_media(obs, multi_photo_zip)
+        assert len(photo_refs) == len(obs.photos)
+        for photo_ref, entry in zip(photo_refs, obs.photos):
+            assert photo_ref.zip_entry == f"photos/{entry.photo}"
+        total_photo_refs += len(photo_refs)
+    assert total_photo_refs == 7
+
+
+def test_media_join_raises_when_an_array_entry_names_a_missing_file():
+    fake = _dummy_obs(
+        photo="exists.jpg",
+        photos=(
+            PhotoRef(photo="exists.jpg", ref_photo=None),
+            PhotoRef(photo="does-not-exist.jpg", ref_photo=None),
+        ),
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("photos/exists.jpg", b"fake")
+    with zipfile.ZipFile(buf) as zf:
+        with pytest.raises(MediaJoinError):
+            media.resolve_media(fake, zf)

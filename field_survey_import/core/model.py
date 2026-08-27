@@ -40,6 +40,18 @@ class Geometry:
 
 
 @dataclass(frozen=True)
+class PhotoRef:
+    """One entry of the `photos` array (handoff addendum). `ref_photo`, when set,
+    names a file inside the REFERENCE zip (§7 semantics, scoped to this one photo
+    rather than the whole observation) - never resolvable against this export's
+    own media.
+    """
+
+    photo: str
+    ref_photo: str | None
+
+
+@dataclass(frozen=True)
 class Observation:
     """One GeoJSON Feature from session.geojson, geometry + all 25 documented
     properties (handoff §3) plus any properties this version of the plugin doesn't
@@ -60,6 +72,12 @@ class Observation:
     heading_accuracy_deg: float | None
     note: str
     photo: str | None
+    # Every photo on this observation (handoff addendum), always populated - even
+    # on an old export lacking the `photos` key, reader.py synthesises this from
+    # the `photo`/`ref_photo` scalars so callers never special-case the old shape.
+    # No default: leaving this unpopulated is exactly the class of bug this type
+    # exists to prevent.
+    photos: tuple[PhotoRef, ...]
     audio: str | None
     audio_duration_ms: int | None
     feature_layer: str | None

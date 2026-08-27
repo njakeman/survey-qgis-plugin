@@ -27,16 +27,22 @@ class MediaRef:
     zip_entry: str  # "photos/<filename>" - the actual zip member name
 
 
-def resolve_media(obs: Observation, zf: zipfile.ZipFile) -> tuple[MediaRef | None, MediaRef | None]:
-    """Returns (photo_ref, audio_ref) for one observation, or None for either that's
-    absent. Raises MediaJoinError if a non-null reference names a file the zip
-    doesn't contain - the format guarantees that can't happen (§2), so if it does,
-    the zip is corrupt or truncated and the caller should not proceed silently.
+def resolve_media(
+    obs: Observation, zf: zipfile.ZipFile
+) -> tuple[tuple[MediaRef, ...], MediaRef | None]:
+    """Returns (photo_refs, audio_ref) for one observation - one MediaRef per entry
+    in obs.photos (handoff addendum), in order, and None for audio if absent.
+    Raises MediaJoinError if a non-null reference names a file the zip doesn't
+    contain - the format guarantees that can't happen (§2), so if it does, the zip
+    is corrupt or truncated and the caller should not proceed silently.
     """
     names = set(zf.namelist())
-    photo_ref = _resolve_one(obs.photo, PHOTOS_DIR, names, obs_id=obs.obs_id, kind="photo")
+    photo_refs = tuple(
+        _resolve_one(entry.photo, PHOTOS_DIR, names, obs_id=obs.obs_id, kind="photo")
+        for entry in obs.photos
+    )
     audio_ref = _resolve_one(obs.audio, AUDIO_DIR, names, obs_id=obs.obs_id, kind="audio")
-    return photo_ref, audio_ref
+    return photo_refs, audio_ref
 
 
 def _resolve_one(

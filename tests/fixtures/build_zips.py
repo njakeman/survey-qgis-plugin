@@ -31,6 +31,7 @@ _FULL_PROPS_TEMPLATE = {
     "heading_accuracy_deg": 8.0,
     "note": "",
     "photo": None,
+    "photos": None,
     "audio": None,
     "audio_duration_ms": None,
     "feature_layer": None,
@@ -238,7 +239,7 @@ def build_old_export_zip() -> bytes:
     props = dict(_FULL_PROPS_TEMPLATE)
     props["obs_id"] = "01OLDEXPORTOBS00000000001"
     for key in (
-        "audio_duration_ms", "trace_gaps", "ref_obs_id", "ref_photo",
+        "audio_duration_ms", "trace_gaps", "ref_obs_id", "ref_photo", "photos",
         "feature_layer", "feature_id", "feature_label",
     ):
         del props[key]
@@ -249,6 +250,188 @@ def build_old_export_zip() -> bytes:
         "features": [{"type": "Feature", "geometry": _point(-0.5, 51.9), "properties": props}],
     }
     return _zip_bytes(doc)
+
+
+def build_multi_photo_zip() -> bytes:
+    """Mirrors the shape of the real multiple-photo-test-2026-08-25.zip fixture (3
+    point features, 2/4/1 photos) for tests that need a synthetic Path rather than
+    the committed real one. obs_id deliberately != any photo basename, re-pinning
+    the literal-join rule for the new array exactly as for the old scalar.
+    """
+    def photos(*names: str) -> list:
+        return [{"photo": n, "ref_photo": None} for n in names]
+
+    features = [
+        _feature(
+            _point(-0.14, 50.83),
+            obs_id="01MULTIPHOTOOBS0000000001",
+            photo="01MULTIPHOTOFILE000000001.jpg",
+            photos=photos("01MULTIPHOTOFILE000000001.jpg", "01MULTIPHOTOFILE000000002.jpg"),
+        ),
+        _feature(
+            _point(-0.141, 50.831),
+            obs_id="01MULTIPHOTOOBS0000000002",
+            photo="01MULTIPHOTOFILE000000003.jpg",
+            photos=photos(
+                "01MULTIPHOTOFILE000000003.jpg",
+                "01MULTIPHOTOFILE000000004.jpg",
+                "01MULTIPHOTOFILE000000005.jpg",
+                "01MULTIPHOTOFILE000000006.jpg",
+            ),
+        ),
+        _feature(
+            _point(-0.142, 50.832),
+            obs_id="01MULTIPHOTOOBS0000000003",
+            photo="01MULTIPHOTOFILE000000007.jpg",
+            photos=photos("01MULTIPHOTOFILE000000007.jpg"),
+        ),
+    ]
+    doc = {
+        "type": "FeatureCollection",
+        "survey_session": {**_BASE_SESSION, "id": "01MULTIPHOTOSESSION000001"},
+        "features": features,
+    }
+    media = {
+        f"photos/01MULTIPHOTOFILE00000000{i}.jpg": b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+        for i in range(1, 8)
+    }
+    return _zip_bytes(doc, media=media)
+
+
+def build_multi_photo_reference_zip() -> bytes:
+    """The baseline build_multi_photo_revisit_zip() revisits: one observation with
+    3 photos, so per-photo ref_photo pairing (handoff addendum §7) has more than
+    one candidate to choose between.
+    """
+    features = [
+        _feature(
+            _point(-0.1, 51.5),
+            obs_id="01MPREFOBS0000000000001",
+            photo="01MPREFPHOTO000000000001.jpg",
+            photos=[
+                {"photo": "01MPREFPHOTO000000000001.jpg", "ref_photo": None},
+                {"photo": "01MPREFPHOTO000000000002.jpg", "ref_photo": None},
+                {"photo": "01MPREFPHOTO000000000003.jpg", "ref_photo": None},
+            ],
+        ),
+    ]
+    doc = {
+        "type": "FeatureCollection",
+        "survey_session": {
+            "id": "01MPREFSESSION0000000001",
+            "name": "Multi-photo baseline",
+            "started_at": "2026-04-12T09:00:00.000Z",
+            "ended_at": "2026-04-12T10:00:00.000Z",
+        },
+        "features": features,
+    }
+    media = {
+        f"photos/01MPREFPHOTO00000000000{i}.jpg": b"\xff\xd8\xff\xe0fake-reference-jpeg"
+        for i in (1, 2, 3)
+    }
+    return _zip_bytes(doc, media=media)
+
+
+def build_multi_photo_revisit_zip() -> bytes:
+    """Revisits build_multi_photo_reference_zip() with one observation carrying 3
+    photos: two pair with specific reference photos (per-photo ref_photo, handoff
+    addendum §7), one names a reference photo that doesn't exist (a miss to
+    resolve gracefully), and a 4th photo has no ref_photo at all (falls back to
+    the ref_obs_id<->obs_id join, matching the single-photo behaviour).
+    """
+    features = [
+        _feature(
+            _point(-0.1, 51.5),
+            obs_id="01MPREVISITOBS000000001",
+            note="Re-photographed from three angles",
+            photo="01MPREVISITPHOTO00000001.jpg",
+            photos=[
+                {
+                    "photo": "01MPREVISITPHOTO00000001.jpg",
+                    "ref_photo": "01MPREFPHOTO000000000001.jpg",
+                },
+                {
+                    "photo": "01MPREVISITPHOTO00000002.jpg",
+                    "ref_photo": "01MPREFPHOTO000000000002.jpg",
+                },
+                {
+                    # 9999 doesn't exist in the reference zip - a deliberate miss.
+                    "photo": "01MPREVISITPHOTO00000003.jpg",
+                    "ref_photo": "01MPREFPHOTO000000009999.jpg",
+                },
+                {"photo": "01MPREVISITPHOTO00000004.jpg", "ref_photo": None},
+            ],
+            ref_obs_id="01MPREFOBS0000000000001",
+            ref_photo="01MPREFPHOTO000000000001.jpg",
+        ),
+    ]
+    doc = {
+        "type": "FeatureCollection",
+        "survey_session": {**_BASE_SESSION, "id": "01MPREVISITSESSION00001"},
+        "survey_revisit": {
+            "reference_file": "multi-photo-baseline-2026-04-12.zip",
+            "reference_hash": "deadbeef" * 8,
+            "reference_session_id": "01MPREFSESSION0000000001",
+            "reference_session_name": "Multi-photo baseline",
+            "reference_started_at": "2026-04-12T09:00:00.000Z",
+            "stations": [
+                {"ref_obs_id": "01MPREFOBS0000000000001", "state": "done", "reason": None},
+            ],
+        },
+        "features": features,
+    }
+    media = {
+        f"photos/01MPREVISITPHOTO0000000{i}.jpg": b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+        for i in (1, 2, 3, 4)
+    }
+    return _zip_bytes(doc, media=media)
+
+
+def build_photos_tolerance_zip() -> bytes:
+    """One feature per reader.py tolerance rule (handoff addendum): empty photos
+    array with a non-null scalar photo (synthesise); a bare-string array entry;
+    a scalar photo absent from the array (prepend, never lose it); a duplicated
+    entry (dedupe, preserving first-seen order/ref_photo).
+    """
+    features = [
+        _feature(
+            _point(-0.2, 51.6),
+            obs_id="01TOLERANCEOBS00000000001",
+            photo="01TOLERANCEFILE00000001.jpg",
+            photos=[],
+        ),
+        _feature(
+            _point(-0.201, 51.601),
+            obs_id="01TOLERANCEOBS00000000002",
+            photo="01TOLERANCEFILE00000002.jpg",
+            photos=["01TOLERANCEFILE00000002.jpg"],
+        ),
+        _feature(
+            _point(-0.202, 51.602),
+            obs_id="01TOLERANCEOBS00000000003",
+            photo="01TOLERANCEFILE00000003.jpg",
+            photos=[{"photo": "01TOLERANCEFILE00000004.jpg", "ref_photo": None}],
+        ),
+        _feature(
+            _point(-0.203, 51.603),
+            obs_id="01TOLERANCEOBS00000000004",
+            photo="01TOLERANCEFILE00000005.jpg",
+            photos=[
+                {"photo": "01TOLERANCEFILE00000005.jpg", "ref_photo": None},
+                {"photo": "01TOLERANCEFILE00000005.jpg", "ref_photo": None},
+            ],
+        ),
+    ]
+    doc = {
+        "type": "FeatureCollection",
+        "survey_session": {**_BASE_SESSION, "id": "01TOLERANCESESSION000001"},
+        "features": features,
+    }
+    media = {
+        f"photos/01TOLERANCEFILE0000000{i}.jpg": b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+        for i in (1, 2, 3, 4, 5)
+    }
+    return _zip_bytes(doc, media=media)
 
 
 def build_self_intersecting_polygon_zip() -> bytes:

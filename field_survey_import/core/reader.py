@@ -26,6 +26,7 @@ from .model import (
     Geometry,
     GeometryType,
     Observation,
+    PhotoRef,
     RevisitStation,
     SurveyExport,
     SurveyRevisit,
@@ -231,6 +232,59 @@ def _as_trace_gaps(value: object, *, obs_id: str) -> tuple[int, ...] | None:
     return tuple(result)
 
 
+def _as_photo_entry(item: object, *, obs_id: str, index: int) -> PhotoRef:
+    if isinstance(item, str):
+        return PhotoRef(photo=item, ref_photo=None)
+    if isinstance(item, dict):
+        photo = item.get("photo")
+        if not isinstance(photo, str):
+            raise SurveyFormatError(
+                f"{obs_id}.photos[{index}].photo: expected a string, got {type(photo).__name__}"
+            )
+        ref_photo = item.get("ref_photo")
+        if ref_photo is not None and not isinstance(ref_photo, str):
+            raise SurveyFormatError(
+                f"{obs_id}.photos[{index}].ref_photo: expected a string or null, "
+                f"got {type(ref_photo).__name__}"
+            )
+        return PhotoRef(photo=photo, ref_photo=ref_photo)
+    raise SurveyFormatError(
+        f"{obs_id}.photos[{index}]: expected a string or object, got {type(item).__name__}"
+    )
+
+
+def _as_photos(
+    value: object, *, obs_id: str, photo: str | None, ref_photo: str | None
+) -> tuple[PhotoRef, ...]:
+    """The `photos` array (handoff addendum - not part of the original §3 schema).
+    `photo`/`ref_photo` are this observation's already-parsed scalar properties,
+    used both to synthesise a result when `photos` itself is absent/null/empty
+    (every export before this format change, and any future one that reverts to
+    single-photo), and to make sure a scalar `photo` is never lost even if some
+    future export's array happened to omit it - see the handoff addendum.
+    """
+    if value is None or value is _MISSING or value == []:
+        return (PhotoRef(photo=photo, ref_photo=ref_photo),) if photo is not None else ()
+
+    if not isinstance(value, list):
+        raise SurveyFormatError(f"{obs_id}.photos: expected a list, got {type(value).__name__}")
+
+    entries = [_as_photo_entry(item, obs_id=obs_id, index=i) for i, item in enumerate(value)]
+
+    seen = {entry.photo for entry in entries}
+    if photo is not None and photo not in seen:
+        entries.insert(0, PhotoRef(photo=photo, ref_photo=ref_photo))
+
+    deduped: list[PhotoRef] = []
+    dedup_seen: set[str] = set()
+    for entry in entries:
+        if entry.photo in dedup_seen:
+            continue
+        dedup_seen.add(entry.photo)
+        deduped.append(entry)
+    return tuple(deduped)
+
+
 def _parse_geometry(raw: dict, *, obs_id: str) -> Geometry:
     if not isinstance(raw, dict):
         raise SurveyFormatError(f"{obs_id}: feature has no geometry object")
@@ -333,7 +387,10 @@ def _parse_observation(raw: dict, *, index: int) -> Observation:
         heading_deg=dbl("heading_deg"),
         heading_accuracy_deg=dbl("heading_accuracy_deg"),
         note=req_txt("note"),
-        photo=txt("photo"),
+        photo=(photo := txt("photo")),
+        photos=_as_photos(
+            _get(props, "photos"), obs_id=obs_id, photo=photo, ref_photo=txt("ref_photo")
+        ),
         audio=txt("audio"),
         audio_duration_ms=num("audio_duration_ms"),
         feature_layer=feature_layer,
