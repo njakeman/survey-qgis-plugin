@@ -53,7 +53,10 @@ def main() -> None:
         layer.setRenderer(_BUILD_RENDERER[kind]())
 
         out_path = STYLES_DIR / _QML_NAME[kind]
-        ok, msg = layer.saveNamedStyle(str(out_path))
+        # saveNamedStyle returns (message, success) - message first, NOT
+        # (success, message) as its argument order might suggest (same trap as
+        # loadNamedStyle, documented in qgis/styling.py and CLAUDE.md).
+        msg, ok = layer.saveNamedStyle(str(out_path))
         if not ok:
             raise SystemExit(f"failed saving {out_path}: {msg}")
         print(f"wrote {out_path}")
