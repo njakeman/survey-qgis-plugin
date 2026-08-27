@@ -76,7 +76,7 @@ def test_replace_leaves_exactly_one_import(sample_zip_path, tmp_path):
     layer_names = {ds.GetLayerByIndex(i).GetName() for i in range(ds.GetLayerCount())}
     ds = None
     # exactly the 3 geometry layers + 3 side tables, no orphans from the first import
-    side_tables = {"fs_sessions", "fs_revisits", "fs_revisit_stations"}
+    side_tables = {"fs_sessions", "fs_revisits", "fs_revisit_stations", "fs_photos"}
     expected = {wl.table_name for wl in second.layers} | side_tables
     assert layer_names == expected
 

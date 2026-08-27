@@ -70,7 +70,7 @@ def write_geometry_layers(
     export: SurveyExport,
     *,
     session_id: str,
-    media_paths: dict[str, tuple[str | None, str | None]],
+    media_paths: dict[str, tuple[list[str], str | None]],
     revisit_lookup: dict[str, tuple[str, str | None]],
 ) -> list[WrittenLayer]:
     """Writes Points/Paths/Boundaries layers into gpkg_path (created if absent,
@@ -78,7 +78,9 @@ def write_geometry_layers(
     three, even when a kind has zero features, so layer naming/structure never
     depends on what a particular session happened to record (§4).
 
-    media_paths: obs_id -> (photo_path, audio_path), both relative to the
+    media_paths: obs_id -> (photo_paths, audio_path) - photo_paths is every
+    extracted photo for that observation in obs.photos order (handoff addendum,
+    may be empty), audio_path a single path or None; both relative to the
     GeoPackage's directory (§4 "prefer relative paths").
     revisit_lookup: ref_obs_id -> (state, reason), used to denormalise revisit
     station state onto the matching observation's row (obs.ref_obs_id).
@@ -133,7 +135,7 @@ def _build_memory_layer(
     kind: GeometryType,
     observations: list[Observation],
     session_id: str,
-    media_paths: dict[str, tuple[str | None, str | None]],
+    media_paths: dict[str, tuple[list[str], str | None]],
     revisit_lookup: dict[str, tuple[str, str | None]],
 ) -> QgsVectorLayer:
     from ..core.schema import ALL_FIELDS
@@ -146,7 +148,7 @@ def _build_memory_layer(
 
     features = []
     for obs in observations:
-        photo_path, audio_path = media_paths.get(obs.obs_id, (None, None))
+        photo_paths, audio_path = media_paths.get(obs.obs_id, ([], None))
         revisit_state, revisit_reason = (
             revisit_lookup.get(obs.ref_obs_id, (None, None)) if obs.ref_obs_id else (None, None)
         )
@@ -155,7 +157,7 @@ def _build_memory_layer(
                 obs,
                 layer.fields(),
                 session_id=session_id,
-                photo_path=photo_path,
+                photo_paths=photo_paths,
                 audio_path=audio_path,
                 revisit_state=revisit_state,
                 revisit_reason=revisit_reason,
@@ -174,6 +176,7 @@ def _build_memory_layer(
 _SESSIONS_TABLE = "fs_sessions"
 _REVISITS_TABLE = "fs_revisits"
 _STATIONS_TABLE = "fs_revisit_stations"
+_PHOTOS_TABLE = "fs_photos"
 
 _SESSIONS_FIELDS = (
     ("import_id", ogr.OFTString),
@@ -215,6 +218,23 @@ _STATIONS_FIELDS = (
     ("reason", ogr.OFTString),
 )
 
+# One row per photo (handoff addendum), post-dating v0.1.0 - see ensure_side_tables's
+# skip-if-exists loop and delete_session_rows_and_layers's guarded DELETE for what
+# that means for a GeoPackage a previous plugin version wrote.
+_PHOTOS_FIELDS = (
+    ("import_id", ogr.OFTString),    # identity: joins fs_sessions.import_id, NOT
+                                      # session_id - Add-alongside gives one
+                                      # session_id two import_ids (module docstring)
+    ("session_id", ogr.OFTString),   # deliberately NOT unique, same reason
+    ("layer_table", ogr.OFTString),  # which of the 3 geometry tables holds obs_id
+    ("obs_id", ogr.OFTString),       # joins <layer_table>.obs_id
+    ("seq", ogr.OFTInteger),         # 0-based index within photos[]
+    ("photo", ogr.OFTString),        # literal photos[seq].photo - the §2/§8 join key
+    ("ref_photo", ogr.OFTString),    # photos[seq].ref_photo - filename INSIDE THE
+                                      # REFERENCE ZIP, never this one
+    ("photo_path", ogr.OFTString),   # extracted file, relative to the .gpkg dir
+)
+
 
 def ensure_side_tables(gpkg_path: Path) -> None:
     """Idempotently create the three side tables if this is a fresh GeoPackage (or
@@ -231,6 +251,7 @@ def ensure_side_tables(gpkg_path: Path) -> None:
             (_SESSIONS_TABLE, _SESSIONS_FIELDS),
             (_REVISITS_TABLE, _REVISITS_FIELDS),
             (_STATIONS_TABLE, _STATIONS_FIELDS),
+            (_PHOTOS_TABLE, _PHOTOS_FIELDS),
         ):
             if name in existing:
                 continue
@@ -326,6 +347,39 @@ def insert_revisit_rows(gpkg_path: Path, *, import_id: str, session_id: str, rev
         ds = None  # noqa: F841
 
 
+@dataclass(frozen=True)
+class PhotoRow:
+    layer_table: str
+    obs_id: str
+    seq: int
+    photo: str
+    ref_photo: str | None
+    photo_path: str | None
+
+
+def insert_photo_rows(
+    gpkg_path: Path, *, import_id: str, session_id: str, rows: list[PhotoRow]
+) -> None:
+    if not rows:
+        return
+    ds = ogr.Open(str(gpkg_path), update=1)
+    try:
+        lyr = ds.GetLayerByName(_PHOTOS_TABLE)
+        for row in rows:
+            feat = ogr.Feature(lyr.GetLayerDefn())
+            feat["import_id"] = import_id
+            feat["session_id"] = session_id
+            feat["layer_table"] = row.layer_table
+            feat["obs_id"] = row.obs_id
+            feat["seq"] = row.seq
+            feat["photo"] = row.photo
+            feat["ref_photo"] = row.ref_photo
+            feat["photo_path"] = row.photo_path
+            lyr.CreateFeature(feat)
+    finally:
+        ds = None  # noqa: F841
+
+
 def list_all_slugs(gpkg_path: Path) -> set[str]:
     """Every slug already used in this GeoPackage, across all sessions - what
     identity.unique_slug() must avoid colliding with for 'Add alongside' (§4).
@@ -368,9 +422,41 @@ def delete_session_rows_and_layers(gpkg_path: Path, session_id: str) -> None:
                 if name:
                     _delete_layer_by_name(ds, name)
         escaped = session_id.replace("'", "''")
+        # fs_photos post-dates v0.1.0 - a GeoPackage written by an older plugin
+        # version doesn't have it, and ogr.UseExceptions() (module-level, above)
+        # makes DELETE-from-a-missing-table a RuntimeError, not a silent no-op.
+        # This runs BEFORE import_zip()'s ensure_side_tables() call (duplicates.py
+        # replace_import), so the guard is load-bearing, not defensive dead code.
+        if ds.GetLayerByName(_PHOTOS_TABLE) is not None:
+            ds.ExecuteSQL(f"DELETE FROM {_PHOTOS_TABLE} WHERE session_id = '{escaped}'")
         ds.ExecuteSQL(f"DELETE FROM {_STATIONS_TABLE} WHERE session_id = '{escaped}'")
         ds.ExecuteSQL(f"DELETE FROM {_REVISITS_TABLE} WHERE session_id = '{escaped}'")
         ds.ExecuteSQL(f"DELETE FROM {_SESSIONS_TABLE} WHERE session_id = '{escaped}'")
+    finally:
+        ds = None  # noqa: F841
+
+
+def query_photos_by_import_id(gpkg_path: Path, import_id: str) -> list[dict]:
+    """Every fs_photos row for one import, in seq order (revisit.py's per-photo
+    then-vs-now lookup). Empty list if the GeoPackage, the side table, or a
+    matching import_id doesn't exist - this is the fallback trigger for a
+    reference session imported before fs_photos existed (see revisit.py).
+    """
+    if not gpkg_path.exists():
+        return []
+    ds = ogr.Open(str(gpkg_path))
+    if ds is None:
+        return []
+    try:
+        lyr = ds.GetLayerByName(_PHOTOS_TABLE)
+        if lyr is None:
+            return []
+        escaped = import_id.replace("'", "''")
+        lyr.SetAttributeFilter(f"import_id = '{escaped}'")
+        field_names = [name for name, _ in _PHOTOS_FIELDS]
+        rows = [{name: feat.GetField(name) for name in field_names} for feat in lyr]
+        rows.sort(key=lambda r: (r.get("obs_id") or "", r.get("seq") or 0))
+        return rows
     finally:
         ds = None  # noqa: F841
 

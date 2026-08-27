@@ -55,12 +55,11 @@ def import_zip(
         refs = set()
         obs_media_refs = {}
         for obs in export.observations:
-            photo_ref, audio_ref = media.resolve_media(obs, zf)
-            if photo_ref:
-                refs.add(photo_ref)
+            photo_refs, audio_ref = media.resolve_media(obs, zf)
+            refs.update(photo_refs)
             if audio_ref:
                 refs.add(audio_ref)
-            obs_media_refs[obs.obs_id] = (photo_ref, audio_ref)
+            obs_media_refs[obs.obs_id] = (photo_refs, audio_ref)
 
         written_files = media.extract_media(zf, refs, media_dir) if refs else {}
 
@@ -68,8 +67,8 @@ def import_zip(
         return _relative_to(written_files[ref.zip_entry], gpkg_path.parent) if ref else None
 
     media_paths = {}
-    for obs_id, (photo_ref, audio_ref) in obs_media_refs.items():
-        media_paths[obs_id] = (_rel(photo_ref), _rel(audio_ref))
+    for obs_id, (photo_refs, audio_ref) in obs_media_refs.items():
+        media_paths[obs_id] = ([_rel(r) for r in photo_refs], _rel(audio_ref))
 
     revisit_lookup = {}
     if export.revisit is not None:
@@ -108,6 +107,25 @@ def import_zip(
     )
     writer.insert_revisit_rows(
         gpkg_path, import_id=import_id, session_id=export.session.id, revisit=export.revisit
+    )
+
+    table_by_kind = {wl.geometry_type: wl.table_name for wl in layers}
+    photo_rows = []
+    for obs in export.observations:
+        photo_paths, _audio_rel = media_paths.get(obs.obs_id, ([], None))
+        for seq, entry in enumerate(obs.photos):
+            photo_rows.append(
+                writer.PhotoRow(
+                    layer_table=table_by_kind[obs.geometry.type],
+                    obs_id=obs.obs_id,
+                    seq=seq,
+                    photo=entry.photo,
+                    ref_photo=entry.ref_photo,
+                    photo_path=photo_paths[seq] if seq < len(photo_paths) else None,
+                )
+            )
+    writer.insert_photo_rows(
+        gpkg_path, import_id=import_id, session_id=export.session.id, rows=photo_rows
     )
 
     return ImportResult(

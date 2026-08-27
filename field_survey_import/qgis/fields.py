@@ -61,11 +61,14 @@ def observation_to_feature(
     fields: QgsFields,
     *,
     session_id: str,
-    photo_path: str | None,
+    photo_paths: list[str],
     audio_path: str | None,
     revisit_state: str | None,
     revisit_reason: str | None,
 ) -> QgsFeature:
+    """photo_paths: every extracted photo for this observation, relative to the
+    GeoPackage's directory, in obs.photos order (handoff addendum - may be empty).
+    """
     feature = QgsFeature(fields)
     feature.setGeometry(build_geometry(obs.geometry))
 
@@ -82,6 +85,11 @@ def observation_to_feature(
         "heading_accuracy_deg": obs.heading_accuracy_deg,
         "note": obs.note,
         "photo": obs.photo,
+        "photos": (
+            json.dumps([{"photo": p.photo, "ref_photo": p.ref_photo} for p in obs.photos])
+            if obs.photos
+            else None
+        ),
         "audio": obs.audio,
         "audio_duration_ms": obs.audio_duration_ms,
         "feature_layer": obs.feature_layer,
@@ -96,7 +104,9 @@ def observation_to_feature(
         "session_name": obs.session_name,
         "app_version": obs.app_version,
         "session_id": session_id,
-        "photo_path": photo_path,
+        "photo_path": photo_paths[0] if photo_paths else None,
+        "photo_paths": json.dumps(photo_paths) if photo_paths else None,
+        "photo_count": len(photo_paths),
         "audio_path": audio_path,
         "revisit_state": revisit_state,
         "revisit_reason": revisit_reason,
