@@ -5,10 +5,12 @@ surveyor can attach a photo while walking a trace - sample.zip's own data has a
 Point note reading "A photo while walking boundary").
 
 The path-resolution expression this all depends on -
-`file_path(layer_property(@layer,'path')) || '/' || "photo_path"` - was verified
-against a real imported GeoPackage layer before being relied on here (not
-assumed): it resolves to the .gpkg's own directory with no `|layername=`
-contamination, and the resulting path exists on disk.
+`file_path(layer_property(@layer,'path')) || '/' || "<some path column>"` - was
+verified against a real imported GeoPackage layer before being relied on here
+(not assumed): it resolves to the .gpkg's own directory with no `|layername=`
+contamination, the resulting path exists on disk, and (re-verified for the photo
+gallery below) it also resolves correctly evaluated once per element inside an
+array_foreach lambda.
 """
 from qgis.core import QgsEditorWidgetSetup, QgsVectorLayer
 from qgis.gui import QgsExternalResourceWidget, QgsFileWidget
@@ -17,11 +19,59 @@ from qgis.gui import QgsExternalResourceWidget, QgsFileWidget
 # absolute, OS-correct path: media is stored relative to the GeoPackage's own
 # directory (core/schema.py's photo_path/audio_path doc), so this expression is
 # the one portability mechanism everything else builds on.
-_RESOLVE_PHOTO_EXPR = (
-    "replace(file_path(layer_property(@layer,'path')) || '/' || \"photo_path\", '\\\\', '/')"
-)
 _RESOLVE_AUDIO_EXPR = (
     "replace(file_path(layer_property(@layer,'path')) || '/' || \"audio_path\", '\\\\', '/')"
+)
+
+# Every photo on this feature, as an array (handoff addendum). Deliberately
+# `attribute(@feature, 'name')` rather than a bare `"name"` reference: on a layer
+# written before this change, photo_paths/photo_count don't exist, and a bare
+# reference to a MISSING column is an EVALUATION error - which (exactly like the
+# switch-CASE trap below) makes QGIS leave the WHOLE [% %] block verbatim in the
+# rendered tip rather than degrading gracefully. attribute() returns NULL for a
+# missing field with no error at all, so an old layer falls cleanly through to
+# the single photo_path - verified against a real GeoPackage written before
+# photo_paths existed. try(expr, fallback) does NOT rescue this (it evaluates to
+# NULL, not the fallback) - attribute() is the only fix.
+_PHOTO_LIST_EXPR = (
+    "coalesce("
+    "from_json(attribute(@feature, 'photo_paths')), "
+    "CASE WHEN attribute(@feature, 'photo_path') IS NOT NULL "
+    "THEN array(attribute(@feature, 'photo_path')) ELSE array() END)"
+)
+
+# One <img> per photo, sized down as the count goes up so 2-4 fit two-per-row
+# and 5+ fit three-per-row inside the tip's 320px container.
+_PHOTO_IMG_EXPR = (
+    "'<img src=\"file:///' || @fs_dir || '/' || @element || '\" width=\"'"
+    " || (CASE WHEN @fs_n = 1 THEN 300 WHEN @fs_n <= 4 THEN 146 ELSE 96 END)"
+    " || '\" style=\"margin:0 2px 2px 0;\"/>'"
+)
+
+# array_to_string() over an EMPTY array returns NULL, not '' - hence the
+# coalesce wrapper, and the @fs_n = 0 short-circuit so a photo-less feature
+# renders nothing rather than an empty <div>.
+_PHOTO_GALLERY_INNER_EXPR = (
+    "CASE WHEN @fs_n = 0 THEN '' ELSE "
+    "(CASE WHEN @fs_n > 1"
+    " THEN '<div style=\"color:#666;\">' || @fs_n || ' photos</div>' ELSE '' END)"
+    " || coalesce(array_to_string(array_foreach(@fs_photos, " + _PHOTO_IMG_EXPR + "), ''), '')"
+    " END"
+)
+
+# Built via nested string concatenation, not manual bracket-counting, so each
+# with_variable's parens are guaranteed balanced by construction.
+_PHOTO_GALLERY_EXPR = (
+    "with_variable('fs_n', array_length(@fs_photos), " + _PHOTO_GALLERY_INNER_EXPR + ")"
+)
+_PHOTO_GALLERY_EXPR = (
+    "with_variable('fs_photos', " + _PHOTO_LIST_EXPR + ", " + _PHOTO_GALLERY_EXPR + ")"
+)
+_PHOTO_GALLERY_EXPR = (
+    "with_variable('fs_dir',"
+    " replace(file_path(layer_property(@layer,'path')), '\\\\', '/'), "
+    + _PHOTO_GALLERY_EXPR
+    + ")"
 )
 
 _POSITION_SOURCE_CAVEAT = (
@@ -40,9 +90,7 @@ _POSITION_SOURCE_CAVEAT = (
 
 MAP_TIP_HTML = f"""
 <div style="max-width:320px; font-family:sans-serif; font-size:11px;">
-[% CASE WHEN "photo_path" IS NOT NULL THEN
-   '<img src="file:///' || {_RESOLVE_PHOTO_EXPR} || '" style="max-width:300px; display:block;"/>'
-   ELSE '' END %]
+[% {_PHOTO_GALLERY_EXPR} %]
 <b>[% CASE WHEN "note" != '' THEN "note" ELSE '(no note)' END %]</b><br/>
 Recorded: [% format_date("recorded_at", 'yyyy-MM-dd HH:mm') %] UTC<br/>
 [% {_POSITION_SOURCE_CAVEAT} %]<br/>
