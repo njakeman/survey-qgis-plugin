@@ -274,3 +274,63 @@ depend on the reference being present.
    testable without QGIS), then the QGIS layer/GeoPackage/symbology/popup wiring on top.
 3. Build symbology as `.qml` style files applied on import (inspectable, user-overridable)
    rather than only in code.
+
+---
+
+## ADDENDUM — plugin-inferred rules for multiple photos (2026-08-27)
+
+**This section is not part of the original contract above.** Everything from here down was
+inferred by the plugin author from one real export (`multiple-photo-test-2026-08-25.zip`, 3
+Point features, 7 photos, 1 audio file) rather than specified by the app author. Treat it as a
+best-effort reading of the new format, not a guarantee — replace it with a real specification
+if one becomes available, especially the per-photo `ref_photo` semantics (§7 below), which no
+observed export actually populates.
+
+### What changed
+
+A feature's `properties` can now carry a `photos` array alongside the existing scalar `photo`:
+
+```jsonc
+"photo": "01M0WZQ5Z1KSYZ7G1T11D60VXM.jpg",   // RETAINED — see "Backward/forward compat" below
+"ref_photo": null,                            // RETAINED, still scalar
+"photos": [
+  { "photo": "01M0WZQ5Z1KSYZ7G1T11D60VXM.jpg", "ref_photo": null },
+  { "photo": "01M0WZQ5Z20VBH80BPAWCNR17Q.jpg", "ref_photo": null }
+]
+```
+
+Observed facts (all three features in the fixture):
+- `photo == photos[0].photo` in every case — the scalar mirrors the first array entry.
+- `photos` entries are objects with exactly two keys, `photo` (string, matches the existing
+  `photo` property's join rule — a literal filename in `photos/`, never `obs_id`-derived) and
+  `ref_photo` (string or null — the same meaning §7 gives the top-level `ref_photo`, but now
+  scoped to one photo instead of one observation).
+- Counts across the fixture's three features: 2, 4, 1 — all 7 files present under `photos/`,
+  join clean.
+- `obs_id` does not equal any photo's basename here either (e.g. obs `…D60VXK` → photos
+  `…D60VXM`/`…D60VXN`) — re-confirms §8's "join by literal property value" rule for the new
+  array exactly as for the old scalar.
+
+### Backward/forward compatibility assumed by the plugin
+
+- Old exports (e.g. `sample.zip`) have **no `photos` key at all** — tolerate its total absence,
+  not just `null`, per §8's existing "properties may be absent in old exports" rule.
+- `photos` absent, `null`, or `[]` but the scalar `photo` is non-null → synthesise a single
+  `{photo, ref_photo}` entry from the scalars, so no code path ever has to treat "old-format
+  single photo" as a special case distinct from "new-format array of one".
+- If a future export ever has a non-null scalar `photo` that is **not** present in the `photos`
+  array (not observed, but not ruled out), the plugin treats the array as incomplete and
+  prepends the scalar rather than silently dropping it — matching this document's long-standing
+  principle of never losing data on a format the plugin doesn't fully anticipate.
+- An entry that is a bare string rather than `{photo, ref_photo}` is tolerated as
+  `{photo: <that string>, ref_photo: null}` (not observed, but cheap to allow).
+
+### §7 revisited: per-photo reference pairing
+
+Every observed `ref_photo` in this fixture is `null`, so **per-photo revisit pairing is
+untested against real data.** The plugin's assumption, by direct analogy with the existing
+top-level `ref_obs_id`/`ref_photo` semantics: a non-null `photos[i].ref_photo` names a file
+**inside the reference session's zip**, and should be resolved directly against that reference
+session's photos (by filename) rather than through the coarser `ref_obs_id ↔ obs_id`
+observation-level join. When `photos[i].ref_photo` is null, the plugin falls back to that
+observation-level join, exactly as the original single-photo format worked.
