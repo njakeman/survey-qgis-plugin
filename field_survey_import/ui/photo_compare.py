@@ -1,13 +1,25 @@
 """Then-vs-now photo comparison for revisit sessions (handoff §7): a genuinely
 valuable stretch feature, but plain import must not depend on the reference
 being present - so this dialog is equally happy to say plainly what's missing.
+
+Renders one Then/Now row per photo on the observation (handoff addendum -
+per-photo ref_photo), not just the first, in a QScrollArea so an observation
+with several photos doesn't blow out the dialog's height.
 """
+import json
 from pathlib import Path
 
 from qgis.core import QgsProject
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QPixmap
-from qgis.PyQt.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout
+from qgis.PyQt.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..qgis import revisit
 
@@ -42,18 +54,45 @@ class PhotoCompareDialog(QDialog):
         self,
         parent,
         *,
-        now_photo: Path | None,
-        then_photo: Path | None,
-        then_reason: str | None,
-        then_session_name: str | None,
+        pairs: list,  # list[revisit.PhotoPair]
+        reference_session_name: str | None,
+        reference_not_found_reason: str | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Field Survey — Then vs now")
 
-        layout = QHBoxLayout(self)
-        then_title = f"Then — {then_session_name}" if then_session_name else "Then"
-        layout.addLayout(_photo_panel(then_title, then_photo, then_reason))
-        layout.addLayout(_photo_panel("Now", now_photo, "No photo on this observation"))
+        outer = QVBoxLayout(self)
+        then_title_base = (
+            f"Then — {reference_session_name}" if reference_session_name else "Then"
+        )
+
+        if reference_not_found_reason is not None:
+            banner = QLabel(reference_not_found_reason)
+            banner.setWordWrap(True)
+            outer.addWidget(banner)
+
+        if not pairs:
+            outer.addWidget(QLabel("This observation isn't part of a revisit (no ref_obs_id)."))
+            return
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        rows_layout = QVBoxLayout(content)
+
+        multi = len(pairs) > 1
+        for pair in pairs:
+            row = QHBoxLayout()
+            then_title = then_title_base
+            now_title = f"Now ({pair.seq + 1}/{len(pairs)})" if multi else "Now"
+            row.addLayout(_photo_panel(then_title, pair.then_path, pair.not_found_reason))
+            row.addLayout(
+                _photo_panel(now_title, pair.now_path, "No photo on this observation")
+            )
+            rows_layout.addLayout(row)
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
 
 
 def compare_from_action(layer_id: str, fid: int) -> None:
@@ -70,13 +109,7 @@ def compare_from_action(layer_id: str, fid: int) -> None:
     field_names = feature.fields().names()
     ref_obs_id = feature["ref_obs_id"] if "ref_obs_id" in field_names else None
     if not ref_obs_id:
-        dialog = PhotoCompareDialog(
-            None,
-            now_photo=None,
-            then_photo=None,
-            then_reason="This observation isn't part of a revisit (no ref_obs_id).",
-            then_session_name=None,
-        )
+        dialog = PhotoCompareDialog(None, pairs=[], reference_session_name=None)
         dialog.exec_()
         return
 
@@ -85,25 +118,40 @@ def compare_from_action(layer_id: str, fid: int) -> None:
 
     from ..qgis import writer
 
-    reference_session_id = None
-    revisit_rows = writer.query_sessions_by_session_id(gpkg_path, session_id) if session_id else []
-    # query_sessions_by_session_id reads fs_sessions; the reference id lives in
-    # fs_revisits for THIS session's own import_id, so look that up specifically.
-    if revisit_rows:
-        import_id = revisit_rows[0]["import_id"]
-        reference_session_id = _lookup_reference_session_id(gpkg_path, import_id)
+    # Prefer the custom property import_dialog.py sets on load - the most-recent
+    # fs_sessions row for session_id is the wrong import once a session has been
+    # "Add alongside"-ed more than once. Fall back to that query for a layer
+    # opened outside the plugin (e.g. from the Browser), where the property
+    # was never set.
+    import_id = layer.customProperty("field_survey/import_id")
+    if not import_id and session_id:
+        revisit_rows = writer.query_sessions_by_session_id(gpkg_path, session_id)
+        import_id = revisit_rows[0]["import_id"] if revisit_rows else None
 
-    ref = revisit.resolve_reference_photo(gpkg_path, reference_session_id, ref_obs_id)
+    reference_session_id = _lookup_reference_session_id(gpkg_path, import_id) if import_id else None
 
-    now_photo_path = feature["photo_path"] if "photo_path" in field_names else None
-    now_photo = gpkg_path.parent / now_photo_path if now_photo_path else None
+    photos_raw = feature["photos"] if "photos" in field_names else None
+    photo_paths_raw = feature["photo_paths"] if "photo_paths" in field_names else None
+    ref_photos = [e.get("ref_photo") for e in json.loads(photos_raw)] if photos_raw else []
+    photo_paths = json.loads(photo_paths_raw) if photo_paths_raw else []
+    # Both are written from the same obs.photos/media_paths in the same order
+    # (import_flow.py) - a length mismatch would mean extraction silently
+    # dropped a photo, which resolve_media's MediaJoinError should already have
+    # prevented; zip() just declines to guess if it ever happens anyway.
+    now_photos = tuple(zip(photo_paths, ref_photos))
+
+    comparison = revisit.resolve_reference_photos(
+        gpkg_path,
+        reference_session_id=reference_session_id,
+        ref_obs_id=ref_obs_id,
+        now_photos=now_photos,
+    )
 
     dialog = PhotoCompareDialog(
         None,
-        now_photo=now_photo,
-        then_photo=ref.path,
-        then_reason=ref.not_found_reason,
-        then_session_name=ref.reference_session_name,
+        pairs=list(comparison.pairs),
+        reference_session_name=comparison.reference_session_name,
+        reference_not_found_reason=comparison.not_found_reason,
     )
     dialog.exec_()
 
