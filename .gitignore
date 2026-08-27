@@ -14,9 +14,16 @@ __pycache__/
 *.gpkg-wal
 *.gpkg-journal
 
+# GeoPackages/media folders from manual testing at the repo root (deploy.ps1 +
+# real-zip imports for a quick eyeball check) - test suites always write to
+# tmp_path, never here, so this can never catch a fixture by accident.
+/*.gpkg
+/*-media/
+
 # Editor/OS
 .vscode/
 .idea/
 Thumbs.db
 
-# sample.zip and the release plugin zip are intentionally tracked, not ignored
+# sample.zip, multiple-photo-test-*.zip, and the release plugin zip are
+# intentionally tracked, not ignored

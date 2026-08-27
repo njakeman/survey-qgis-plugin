@@ -121,7 +121,7 @@ class ImportDialog(QDialog):
     @staticmethod
     def _preview_text(export) -> str:
         counts = Counter(o.geometry.type for o in export.observations)
-        photo_count = sum(1 for o in export.observations if o.photo)
+        photo_count = sum(len(o.photos) for o in export.observations)
         audio_count = sum(1 for o in export.observations if o.audio)
         ended = export.session.ended_at.isoformat() if export.session.ended_at else "still open"
         lines = [

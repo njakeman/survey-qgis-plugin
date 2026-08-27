@@ -18,6 +18,15 @@ def test_choosing_a_zip_populates_preview_and_suggests_new_gpkg_path(sample_zip_
     assert dialog.dest_new_widget.filePath()  # auto-suggested
 
 
+def test_preview_counts_every_photo_not_just_photod_observations(
+    multi_photo_zip_path, fake_iface
+):
+    dialog = ImportDialog(fake_iface.mainWindow())
+    dialog._on_zip_changed(str(multi_photo_zip_path))
+
+    assert "Photos: 7" in dialog.preview_label.text()  # 2 + 4 + 1, not 3 observations
+
+
 def test_choosing_an_invalid_path_shows_error_not_crash(fake_iface, tmp_path):
     bogus = tmp_path / "not-a-zip.zip"
     bogus.write_bytes(b"not a zip file")

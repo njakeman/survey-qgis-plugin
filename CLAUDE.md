@@ -6,13 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A QGIS 3.28+ plugin (`field_survey_import/`) that imports zip exports from the Field Survey app
 into a GeoPackage as styled Points/Paths/Boundaries layers with photo/audio popups. The zip format
-is a **fixed, externally-owned contract** — full spec in `survey-tool-qgis-plugin-handoff.md`, read
-it before touching `core/`. `sample.zip` is a real 11-feature export used as the primary test
-fixture; `tests/fixtures/build_zips.py` builds synthetic zips for everything the sample doesn't
-cover (revisit sessions, `trace_gaps`, `.m4a` audio, old exports with absent keys, etc).
+is a **fixed, externally-owned contract** — full spec in `survey-tool-qgis-plugin-handoff.md`
+(including an **Addendum** section at the end for the multi-photo `photos` array, which is plugin-
+inferred rather than app-author-specified), read it before touching `core/`. `sample.zip` (11
+features, one legacy photo per observation) and `multiple-photo-test-2026-08-25.zip` (3 features,
+2/4/1 photos each) are real exports used as the primary test fixtures; `tests/fixtures/build_zips.py`
+builds synthetic zips for everything the two samples don't cover (revisit sessions, `trace_gaps`,
+`.m4a` audio, old exports with absent keys, per-photo revisit pairing, etc).
 
 An implementation plan with full rationale lives at
-`C:\Users\neil_\.claude\plans\there-is-also-a-linear-fog.md` if deeper "why" is needed.
+`C:\Users\neil_\.claude\plans\there-is-also-a-linear-fog.md` if deeper "why" is needed - it now
+holds the multiple-photos-per-observation plan, which overwrote the original build-the-whole-plugin
+plan the file used to hold (that one is complete; this file's own git history is the closest thing
+to a record of it, since the plan file itself lives outside this repo).
 
 ## Commands
 
@@ -53,9 +59,11 @@ field_survey_import/
 ├── core/        pure Python, ZERO qgis/PyQt5 imports (enforced by
 │                tests/test_core_has_no_qgis_imports.py, an AST scan - not a convention,
 │                a build-breaking rule). zip -> parsed session model.
-│                schema.py   the 25 documented fields + 5 plugin-added columns, EXPLICITLY
+│                schema.py   the 26 documented fields (25 from handoff §3 + `photos`,
+│                            the addendum's array) + 7 plugin-added columns, EXPLICITLY
 │                            typed (kills the mixed-int/float trap - see Gotchas below)
-│                model.py    frozen dataclasses: SurveyExport/SurveySession/Observation/...
+│                model.py    frozen dataclasses: SurveyExport/SurveySession/Observation/
+│                            PhotoRef/...
 │                reader.py   zip -> SurveyExport; every handoff tolerance rule lives here
 │                media.py    photo/audio resolution + extraction, with a zip-slip guard
 │                identity.py content hashing, session_slug()/unique_slug()
@@ -63,7 +71,8 @@ field_survey_import/
 │                import_flow.py   THE single import entry point - toolbar dialog and the
 │                                 Processing algorithm both call import_zip() and nothing else
 │                writer.py        GeoPackage layer + side-table (fs_sessions/fs_revisits/
-│                                 fs_revisit_stations) writing; duplicate-detection queries
+│                                 fs_revisit_stations/fs_photos) writing; duplicate-detection
+│                                 queries
 │                duplicates.py    check_duplicate() / replace_import() / add_alongside_import()
 │                renderers.py     symbology builders (also scripts/build_styles.py's source
 │                                 and styling.py's runtime fallback if a .qml fails to load)
@@ -133,9 +142,37 @@ builders can't rot silently, they're exercised on every load either way (see
   the blank string if you go looking.
 - **`layer_property(@layer,'path')` on an OGR GeoPackage layer returns the plain `.gpkg` path**,
   no `|layername=` contamination — this is the whole media-path-portability mechanism
-  (`forms.py`'s `_RESOLVE_PHOTO_EXPR`/`_RESOLVE_AUDIO_EXPR`), verified against a real imported
-  layer before being relied on.
+  (`forms.py`'s `_RESOLVE_AUDIO_EXPR`/`_PHOTO_GALLERY_EXPR`), verified against a real imported
+  layer before being relied on. It also resolves correctly evaluated once per element **inside an
+  `array_foreach` lambda** (verified 3.44.8) — no `with_variable` hoisting needed for correctness,
+  only as a one-call-instead-of-N optimisation.
 - **`sample.zip`'s media basenames happen to equal their owning `obs_id`.** That's a coincidence
   of this one fixture — the join is always by the literal `photo`/`audio` property value
   (handoff §2, §8); `tests/test_media.py::test_media_join_is_by_property_value_not_obs_id`
   deliberately uses a mismatched `obs_id` to prove the join doesn't lean on it.
+- **A map-tip expression referencing a column that doesn't exist on a layer is an *evaluation*
+  error, not a parser error** — and QGIS leaves the **whole `[% %]` block verbatim, unrendered**,
+  the same silent-failure shape as the switch-CASE trap above. This bites a layer written by an
+  older plugin version once a new column (e.g. `photo_paths`) is added: a bare `"photo_paths"`
+  reference breaks the entire tip on that old layer, while `attribute(@feature, 'photo_paths')`
+  returns `NULL` with no error and degrades cleanly. **`try(expr, fallback)` does NOT rescue
+  this** — it evaluates to `NULL`, not the fallback; `attribute()` is the only fix. See
+  `forms.py`'s `_PHOTO_LIST_EXPR` and `tests/qgis/test_forms.py::test_map_tip_falls_back_when_photo_paths_column_is_absent`.
+- **`array_to_string()` over an *empty* array returns `NULL`, not `''`** — always wrap it in
+  `coalesce(..., '')`, or a photo-less feature's gallery expression silently becomes `NULL` instead
+  of an empty string (verified 3.44.8).
+- **`ogr.UseExceptions()` is set process-wide (`writer.py`), so `ExecuteSQL("DELETE FROM
+  <table that doesn't exist>")` raises `RuntimeError`, not a silent no-op.** Every side-table
+  DELETE in `delete_session_rows_and_layers()` must guard with `ds.GetLayerByName(...) is not
+  None` first — a GeoPackage written by an older plugin version (e.g. one that predates
+  `fs_photos`) will lack a table a newer version's DELETE assumes exists, and Replace runs this
+  delete step *before* `import_zip()`'s `ensure_side_tables()` call, so there's nothing else to
+  create the table first.
+- **`layer.saveNamedStyle(path)` returns `(message, success)`** — same trap, same order, as
+  `loadNamedStyle()` above; `scripts/build_styles.py` had this backwards until it was noticed
+  (it "worked" only because the success-path message happened to be a non-empty string).
+- **`layer_property(@layer,'path')` only resolves for file-backed layers — `NULL` on a `memory`
+  layer**, with no error. A test simulating "an old GeoPackage's field shape" must still write to a
+  real `.gpkg` on disk and reopen it via the `ogr` provider, not use a `memory` layer, or any
+  expression depending on `layer_property` silently degrades to nothing instead of exercising the
+  real fallback path.

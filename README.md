@@ -11,14 +11,15 @@ One zip becomes:
   (♂-style) marker rotated to match; points without one get a plain circle — never a fake
   direction. Map-marked (not GPS) points are drawn hollow so they can't be mistaken for a
   measured fix.
-- **Photo & audio popups**: hover a point for its photo in a map tip, or open the attribute form
-  for a full preview; a "Play voice note" action opens an embedded player (falling back to your
-  system's player for containers this build's Qt can't decode — verified: `.webm`/Opus needs the
-  fallback here, `.m4a`/AAC plays embedded).
+- **Photo & audio popups**: hover a point for a gallery of every photo on it in a map tip (an
+  observation can carry more than one), or open the attribute form for a full preview of the
+  first; a "Play voice note" action opens an embedded player (falling back to your system's
+  player for containers this build's Qt can't decode — verified: `.webm`/Opus needs the fallback
+  here, `.m4a`/AAC plays embedded).
 - **Revisit sessions**: station state (done / no access / skipped) styled as a coloured halo, plus
-  a "Compare with reference photo" action for then-vs-now, when the reference session is also
-  imported. Importing a revisit **without** its reference works fine — the comparison just says
-  what's missing.
+  a "Compare with reference photo" action for then-vs-now — one paired row per photo, when an
+  observation has several — when the reference session is also imported. Importing a revisit
+  **without** its reference works fine — the comparison just says what's missing.
 - **Re-import handling**: importing the same zip twice is a no-op; a changed re-export offers
   Replace or Add alongside.
 
