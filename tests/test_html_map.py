@@ -98,6 +98,57 @@ def test_document_has_leaflet_and_doctype():
     assert "leaflet.js" in html
 
 
+def test_default_basemap_is_openfreemap_liberty():
+    assert html_map.DEFAULT_BASEMAP == "openfreemap-liberty"
+    with _open(build_zips.build_map_point_zip()) as zf:
+        export = reader.read_export(zf)
+        html = html_map.build_html_document(export, zf)  # default basemap
+
+    assert "maplibre-gl" in html
+    assert "leaflet-maplibre-gl" in html
+    assert "L.maplibreGL(" in html
+    assert "tiles.openfreemap.org/styles/liberty" in html
+    assert "L.tileLayer(" not in html  # the raster code path must not also run
+
+
+@pytest.mark.parametrize(
+    ("basemap", "style_fragment"),
+    [
+        ("openfreemap-liberty", "styles/liberty"),
+        ("openfreemap-bright", "styles/bright"),
+        ("openfreemap-positron", "styles/positron"),
+    ],
+)
+def test_each_openfreemap_style_wires_the_right_style_url(basemap, style_fragment):
+    with _open(build_zips.build_map_point_zip()) as zf:
+        export = reader.read_export(zf)
+        html = html_map.build_html_document(export, zf, basemap=basemap)
+
+    assert "L.maplibreGL(" in html
+    assert style_fragment in html
+    assert "maplibre-gl" in html
+
+
+def test_esri_basemap_omits_maplibre_assets_entirely():
+    with _open(build_zips.build_map_point_zip()) as zf:
+        export = reader.read_export(zf)
+        html = html_map.build_html_document(export, zf, basemap="esri")
+
+    assert "L.tileLayer(" in html
+    assert "server.arcgisonline.com" in html
+    # Locks in the "lean by default" behaviour: choosing the raster basemap must not
+    # pull in the ~1MB+ MapLibre GL library it doesn't need.
+    assert "maplibre" not in html.lower()
+    assert "L.maplibreGL(" not in html
+
+
+def test_unknown_basemap_raises_value_error():
+    with _open(build_zips.build_map_point_zip()) as zf:
+        export = reader.read_export(zf)
+        with pytest.raises(ValueError, match="unknown basemap"):
+            html_map.build_html_document(export, zf, basemap="not-a-real-basemap")
+
+
 def test_point_coordinates_are_swapped_to_lat_lng():
     with _open(build_zips.build_multi_photo_zip()) as zf:
         export = reader.read_export(zf)

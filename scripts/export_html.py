@@ -7,11 +7,12 @@ plain .venv (needs Pillow for photo downscaling - `pip install -r requirements.t
     .venv\\Scripts\\python.exe scripts\\export_html.py <zip_path> [-o output.html]
 
 The finished .html opens in any browser, no install needed - just double-click it or
-open it as a file:// URL. It still loads its map tiles (Esri's free basemap - see
-core/html_map.py for why not OpenStreetMap's or CARTO's) and the Leaflet library from
-a CDN over the *viewer's* own internet connection when opened; every photo and audio
-file is embedded directly in the file itself (base64 data URIs), so nothing else
-needs to be shared alongside it.
+open it as a file:// URL. It still loads its basemap (OpenFreeMap's vector styles by
+default, --basemap esri for a plain raster fallback - see core/html_map.py for why
+not OpenStreetMap's or CARTO's) and the Leaflet library from a CDN over the
+*viewer's* own internet connection when opened; every photo and audio file is
+embedded directly in the file itself (base64 data URIs), so nothing else needs to be
+shared alongside it.
 
 Photos are downscaled/recompressed by default before embedding - see
 core/html_map.py / core/photo_optimize.py. Use --no-optimize-photos to embed
@@ -52,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Output .html path (default: <zip stem>.html next to the input zip)",
     )
     parser.add_argument(
+        "--basemap", choices=sorted(html_map.BASEMAPS), default=html_map.DEFAULT_BASEMAP,
+        help="Basemap to use (default: %(default)s). The openfreemap-* choices are "
+        "vector styles (need a WebGL-capable browser); esri is a plain raster "
+        "fallback that works everywhere.",
+    )
+    parser.add_argument(
         "--no-optimize-photos", action="store_true",
         help="Embed photos at their original resolution/quality (default: downscale "
         "to fit --max-photo-dimension at --photo-quality - see module docstring)",
@@ -78,7 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         with zipfile.ZipFile(args.zip_path) as zf:
             export = reader.read_export(zf)
             summary = html_map.write_html(
-                export, zf, out_path, photo_optimization=photo_optimization
+                export, zf, out_path,
+                photo_optimization=photo_optimization, basemap=args.basemap,
             )
     # MediaJoinError is a SurveyFormatError subclass - it MUST be caught first, or
     # this branch is unreachable and every media problem reports as a generic format
