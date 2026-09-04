@@ -459,3 +459,30 @@ def build_self_intersecting_polygon_zip() -> bytes:
         "features": features,
     }
     return _zip_bytes(doc)
+
+
+def build_kml_special_chars_zip() -> bytes:
+    """A note and session name containing '&', '<', '>', '"', and a note that embeds
+    the literal CDATA-terminator sequence ']]>' - pins that core/kml.py's escaping
+    produces well-formed XML and never truncates a CDATA section early.
+    """
+    note = 'Fence & gate <broken> "locked" - see ]]> note'
+    session_name = "Tricky & <name>"
+    features = [
+        _feature(
+            _point(-0.12, 51.52),
+            obs_id="01KMLSPECIALOBS0000000001",
+            note=note,
+            session_name=session_name,
+        ),
+    ]
+    doc = {
+        "type": "FeatureCollection",
+        "survey_session": {
+            **_BASE_SESSION,
+            "id": "01KMLSPECIALSESSION000001",
+            "name": session_name,
+        },
+        "features": features,
+    }
+    return _zip_bytes(doc)

@@ -16,9 +16,10 @@ builds synthetic zips for everything the two samples don't cover (revisit sessio
 
 An implementation plan with full rationale lives at
 `C:\Users\neil_\.claude\plans\there-is-also-a-linear-fog.md` if deeper "why" is needed - it now
-holds the multiple-photos-per-observation plan, which overwrote the original build-the-whole-plugin
-plan the file used to hold (that one is complete; this file's own git history is the closest thing
-to a record of it, since the plan file itself lives outside this repo).
+holds the KML/KMZ export plan (`scripts/export_kml.py`), which overwrote the multiple-photos-per-
+observation plan the file previously held, which itself overwrote the original build-the-whole-
+plugin plan (both earlier plans are complete; this file's own git history and commit messages are
+the closest thing to a record of them, since the plan file itself lives outside this repo).
 
 ## Commands
 
@@ -46,6 +47,9 @@ Python ships no `pytest`:
 
 # Package a release zip -> dist/field_survey_import-<version>.zip
 .\scripts\package.ps1
+
+# Share a session as a KMZ (Google Earth/Google Maps) - standalone, no QGIS needed
+.venv\Scripts\python.exe scripts\export_kml.py <zip> [-o out.kmz]
 ```
 
 QGIS 3.44.8 LTR lives at `C:\Program Files\QGIS 3.44.8`; nothing QGIS-related is on PATH, so every
@@ -67,6 +71,8 @@ field_survey_import/
 │                reader.py   zip -> SurveyExport; every handoff tolerance rule lives here
 │                media.py    photo/audio resolution + extraction, with a zip-slip guard
 │                identity.py content hashing, session_slug()/unique_slug()
+│                kml.py      zip -> KMZ (scripts/export_kml.py's engine) - hand-built string
+│                            templates, no XML/KML dependency (ElementTree can't emit CDATA)
 ├── qgis/        QGIS API layer, no UI code
 │                import_flow.py   THE single import entry point - toolbar dialog and the
 │                                 Processing algorithm both call import_zip() and nothing else
@@ -176,3 +182,13 @@ builders can't rot silently, they're exercised on every load either way (see
   real `.gpkg` on disk and reopen it via the `ogr` provider, not use a `memory` layer, or any
   expression depending on `layer_property` silently degrades to nothing instead of exercising the
   real fallback path.
+- **Zip-internal paths (KMZ member names, `core/kml.py`'s `<img src=...>` hrefs, and `core/media.py`
+  generally) must be built as plain forward-slash strings, never `pathlib.Path` joins** —
+  `Path("files") / name` yields backslashes on Windows, which silently corrupts both the zip member
+  name and the HTML `href` it's used in.
+- **`xml.sax.saxutils.escape()` inside a CDATA-wrapped HTML block isn't required by the XML spec**
+  (the only sequence actually illegal there is a literal `]]>`) **but is applied anyway in
+  `core/kml.py`'s map-tip-style description balloons** — for HTML-rendering hygiene, and, as a side
+  effect of escaping `>`, it also turns any `]]>` in a surveyor's note into `]]&gt;`, neutralising
+  the one thing that would otherwise truncate the CDATA section early. Don't remove it on the
+  theory that "CDATA doesn't need escaping" - that's true for the XML layer only.
