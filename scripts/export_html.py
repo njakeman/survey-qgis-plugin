@@ -7,10 +7,11 @@ plain .venv (needs Pillow for photo downscaling - `pip install -r requirements.t
     .venv\\Scripts\\python.exe scripts\\export_html.py <zip_path> [-o output.html]
 
 The finished .html opens in any browser, no install needed - just double-click it or
-open it as a file:// URL. It still loads its map tiles (OpenStreetMap) and the
-Leaflet library from a CDN over the *viewer's* own internet connection when opened;
-every photo and audio file is embedded directly in the file itself (base64 data
-URIs), so nothing else needs to be shared alongside it.
+open it as a file:// URL. It still loads its map tiles (Esri's free basemap - see
+core/html_map.py for why not OpenStreetMap's or CARTO's) and the Leaflet library from
+a CDN over the *viewer's* own internet connection when opened; every photo and audio
+file is embedded directly in the file itself (base64 data URIs), so nothing else
+needs to be shared alongside it.
 
 Photos are downscaled/recompressed by default before embedding - see
 core/html_map.py / core/photo_optimize.py. Use --no-optimize-photos to embed

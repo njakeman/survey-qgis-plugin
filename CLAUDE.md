@@ -221,3 +221,25 @@ builders can't rot silently, they're exercised on every load either way (see
   specifically is the target, `core/html_map.py`'s self-contained HTML (photos as base64 data:
   URIs, no bundled-file reference at all) is the answer - don't spend time trying to make My Maps
   cooperate with a KMZ's file references, it structurally can't.
+- **`core/html_map.py`'s basemap tiles come from Esri (`server.arcgisonline.com`), not
+  `tile.openstreetmap.org` or CARTO, and both rejected alternatives were verified empirically, not
+  assumed** — don't "fix" this back to the more obvious/canonical OSM URL without re-reading this:
+  - `tile.openstreetmap.org`: confirmed against a real generated `.html` opened by double-click (a
+    `file://` page) - OSM's volunteer-run tile servers return a 403 "Access blocked" tile for
+    exactly that "opened as a local file, not served from a normal site" pattern, even though a
+    plain `curl` request to the identical URL (with or without a `Referer` header, with a browser
+    User-Agent) succeeds from this machine. The block is specific to how a real browser requests
+    tiles from `file://` and is not reproducible with a simple HTTP client - don't trust a curl
+    check alone to clear this URL.
+  - `basemaps.cartocdn.com` ("CARTO"), the first fix tried: returns a genuine, correctly-sized
+    256x256 PNG with **HTTP 200** on every request now, but the image itself is a placeholder
+    stamped "API KEY REQUIRED" rather than a real tile - their anonymous free tier for this classic
+    raster endpoint has been discontinued. This was only caught by opening the actual screenshot;
+    checking the HTTP status code alone (200, looked fine) would have missed it entirely. **Lesson:
+    verifying a tile/asset URL means inspecting the decoded image content, not just the status
+    code.**
+  - Esri's basic tile services need no API key/signup and are a long-standing common choice for
+    exactly this "embedded/offline app, can't rely on a Referer or an account" scenario - verified
+    the same way (fetched a real tile, opened it, confirmed it was an actual map). Its URL path
+    order is `{z}/{y}/{x}`, not `{z}/{x}/{y}` like OSM/CARTO/most other providers - and it has no
+    `{s}` subdomain or `{r}` retina placeholder, so `detectRetina` is not set for this layer.
