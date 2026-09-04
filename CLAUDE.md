@@ -48,9 +48,11 @@ Python ships no `pytest`:
 # Package a release zip -> dist/field_survey_import-<version>.zip
 .\scripts\package.ps1
 
-# Share a session as a KMZ (Google Earth/Google Maps) - standalone, no QGIS needed
+# Share a session as a KMZ (Google Earth) or self-contained HTML (Google My Maps /
+# no Google Earth) - both standalone, no QGIS needed
 # (needs Pillow: .venv\Scripts\python.exe -m pip install -r requirements.txt)
 .venv\Scripts\python.exe scripts\export_kml.py <zip> [-o out.kmz]
+.venv\Scripts\python.exe scripts\export_html.py <zip> [-o out.html]
 ```
 
 QGIS 3.44.8 LTR lives at `C:\Program Files\QGIS 3.44.8`; nothing QGIS-related is on PATH, so every
@@ -74,6 +76,12 @@ field_survey_import/
 │                identity.py content hashing, session_slug()/unique_slug()
 │                kml.py      zip -> KMZ (scripts/export_kml.py's engine) - hand-built string
 │                            templates, no XML/KML dependency (ElementTree can't emit CDATA)
+│                html_map.py zip -> self-contained HTML+Leaflet map (scripts/export_html.py's
+│                            engine) - for Google My Maps, which never renders a KMZ's embedded
+│                            photos; photos go in as base64 data: URIs instead
+│                photo_optimize.py  downscale/recompress before embedding (kml.py and
+│                            html_map.py both use it) - Pillow, this project's one dependency,
+│                            imported lazily so the module stays importable without it
 ├── qgis/        QGIS API layer, no UI code
 │                import_flow.py   THE single import entry point - toolbar dialog and the
 │                                 Processing algorithm both call import_zip() and nothing else
@@ -193,10 +201,23 @@ builders can't rot silently, they're exercised on every load either way (see
   effect of escaping `>`, it also turns any `]]>` in a surveyor's note into `]]&gt;`, neutralising
   the one thing that would otherwise truncate the CDATA section early. Don't remove it on the
   theory that "CDATA doesn't need escaping" - that's true for the XML layer only.
-- **Pillow (`core/kml.py::_optimize_photo_bytes`) doesn't carry EXIF over on `Image.save()`
-  unless you explicitly pass it back in** — so a photo's EXIF Orientation tag is silently lost on
-  re-encode, and without correcting for that first, a portrait photo re-saves sideways.
-  `ImageOps.exif_transpose()` must run before the resize/save, to bake the rotation into the pixels
-  themselves. The import is deliberately lazy (inside the function, not at module level) so
-  `core/kml.py` stays importable without Pillow installed - only actually optimizing a photo
-  needs it.
+- **Pillow (`core/photo_optimize.py::optimize_photo_bytes`) doesn't carry EXIF over on
+  `Image.save()` unless you explicitly pass it back in** — so a photo's EXIF Orientation tag is
+  silently lost on re-encode, and without correcting for that first, a portrait photo re-saves
+  sideways. `ImageOps.exif_transpose()` must run before the resize/save, to bake the rotation into
+  the pixels themselves. The import is deliberately lazy (inside the function, not at module
+  level) so `photo_optimize.py` - and `core/kml.py`/`core/html_map.py`, which both import from it
+  - stay importable without Pillow installed; only actually optimizing a photo needs it.
+- **Leaflet (and JS mapping libraries generally) take `[lat, lng]`, the OPPOSITE of this
+  codebase's `(lon, lat)` GeoJSON/RFC 7946 internal representation** — `core/html_map.py`'s
+  `_to_latlng()` is the one place in the export code that swaps; `core/kml.py`'s KML output wants
+  `(lon, lat)` and must NOT swap. Getting this backwards silently plots every feature in the wrong
+  place rather than erroring - verify against a real render, don't trust it by inspection alone
+  (this was screenshot-verified against a real zip's actual Cissbury Ring coordinates).
+- **Google My Maps does not render photos embedded in a KMZ's balloon HTML at all, confirmed
+  against a real exported `.kmz`** — not a size issue, not a formatting issue, it simply never
+  loads a `files/...`-relative `<img src>` from inside the zip, regardless of how well-formed the
+  KML is. Google Earth (desktop/web/mobile) renders the identical file's photos fine. If My Maps
+  specifically is the target, `core/html_map.py`'s self-contained HTML (photos as base64 data:
+  URIs, no bundled-file reference at all) is the answer - don't spend time trying to make My Maps
+  cooperate with a KMZ's file references, it structurally can't.

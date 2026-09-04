@@ -8,8 +8,10 @@ __pycache__/
 # Build/packaging output
 /dist/
 *.zip.tmp
-# scripts/export_kml.py output - a generated deliverable, not source
+# scripts/export_kml.py / scripts/export_html.py output - generated deliverables,
+# not source
 *.kmz
+/*.html
 
 # QGIS scratch files sometimes dropped alongside test GeoPackages
 *.gpkg-shm
@@ -21,6 +23,7 @@ __pycache__/
 # tmp_path, never here, so this can never catch a fixture by accident.
 /*.gpkg
 /*-media/
+/*-kmz-unzipped/
 
 # Editor/OS
 .vscode/

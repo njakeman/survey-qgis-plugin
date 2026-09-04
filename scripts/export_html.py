@@ -1,24 +1,20 @@
-"""Turns a Field Survey zip export into a KMZ shareable via Google Earth/Google Maps.
-Standalone script, deliberately NOT a QGIS plugin action - runs under the plain
-.venv (field_survey_import/core is zero-dependency stdlib Python, except for the
-photo downscaling below, which needs Pillow - `pip install -r requirements.txt`).
+"""Turns a Field Survey zip export into a single self-contained HTML map - the
+option for Google My Maps (which never renders photos bundled inside a KMZ, only
+externally-hosted image URLs - see scripts/export_kml.py) or anyone without Google
+Earth. Standalone script, deliberately NOT a QGIS plugin action - runs under the
+plain .venv (needs Pillow for photo downscaling - `pip install -r requirements.txt`).
 
-    .venv\\Scripts\\python.exe scripts\\export_kml.py <zip_path> [-o output.kmz]
+    .venv\\Scripts\\python.exe scripts\\export_html.py <zip_path> [-o output.html]
 
-Photos are downscaled/recompressed by default before embedding (kml.PhotoOptimization
-- see its docstring): the balloon only ever displays a photo at 400px/160px wide, so a
-phone's full-resolution original is wasted size and is usually what pushes a
-multi-photo session's .kmz over Google My Maps' 5MB upload limit. Use
---no-optimize-photos to embed originals unchanged, or --max-photo-dimension/
---photo-quality to tune the trade-off.
+The finished .html opens in any browser, no install needed - just double-click it or
+open it as a file:// URL. It still loads its map tiles (OpenStreetMap) and the
+Leaflet library from a CDN over the *viewer's* own internet connection when opened;
+every photo and audio file is embedded directly in the file itself (base64 data
+URIs), so nothing else needs to be shared alongside it.
 
-Known limitation, confirmed against a real exported .kmz (documented, not solved
-here): Google My Maps' importer does not render images embedded inside a KMZ's
-balloon HTML at all, only externally-hosted image URLs. Google Earth (desktop/web/
-mobile) renders embedded KMZ images fine - this script optimises for that. If My
-Maps specifically is the target, use scripts/export_html.py instead (a
-self-contained HTML file with photos embedded as base64 data URIs, not file
-references - works in any browser, not just Earth).
+Photos are downscaled/recompressed by default before embedding - see
+core/html_map.py / core/photo_optimize.py. Use --no-optimize-photos to embed
+originals unchanged, or --max-photo-dimension/--photo-quality to tune the trade-off.
 """
 from __future__ import annotations
 
@@ -31,26 +27,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))  # so field_survey_import resolves uninstalled,
                                      # matching scripts/build_styles.py's pattern
 
-from field_survey_import.core import kml, reader  # noqa: E402
+from field_survey_import.core import html_map, reader  # noqa: E402
 from field_survey_import.core.errors import MediaJoinError, SurveyFormatError  # noqa: E402
 from field_survey_import.core.model import GeometryType  # noqa: E402
+from field_survey_import.core.photo_optimize import PhotoOptimization  # noqa: E402
 
 _BYTES_PER_MB = 1024 * 1024
 
 
 def _default_output_path(zip_path: Path) -> Path:
-    return zip_path.with_suffix(".kmz")
+    return zip_path.with_suffix(".html")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Convert a Field Survey zip export into a shareable KMZ "
-        "(Google Earth / Google Maps)."
+        description="Convert a Field Survey zip export into a shareable, "
+        "self-contained HTML map (works in any browser, including Google My Maps "
+        "users who can't see photos embedded in a KMZ)."
     )
     parser.add_argument("zip_path", type=Path, help="Path to the Field Survey export zip")
     parser.add_argument(
         "-o", "--output", type=Path, default=None,
-        help="Output .kmz path (default: <zip stem>.kmz next to the input zip)",
+        help="Output .html path (default: <zip stem>.html next to the input zip)",
     )
     parser.add_argument(
         "--no-optimize-photos", action="store_true",
@@ -58,33 +56,27 @@ def main(argv: list[str] | None = None) -> int:
         "to fit --max-photo-dimension at --photo-quality - see module docstring)",
     )
     parser.add_argument(
-        "--max-photo-dimension", type=int, default=kml.DEFAULT_PHOTO_OPTIMIZATION.max_dimension,
+        "--max-photo-dimension", type=int,
+        default=html_map.DEFAULT_PHOTO_OPTIMIZATION.max_dimension,
         help="Longest edge, in pixels, to downscale embedded photos to "
         "(default: %(default)s; larger originals are never upscaled)",
     )
     parser.add_argument(
-        "--photo-quality", type=int, default=kml.DEFAULT_PHOTO_OPTIMIZATION.quality,
+        "--photo-quality", type=int, default=html_map.DEFAULT_PHOTO_OPTIMIZATION.quality,
         help="JPEG quality (1-95) for re-encoded photos (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--warn-over-mb", type=float, default=5.0,
-        help="Print a warning if the finished .kmz exceeds this size in MB - "
-        "5MB is Google My Maps' upload limit (default: %(default)s; 0 disables)",
     )
     args = parser.parse_args(argv)
     out_path = args.output if args.output is not None else _default_output_path(args.zip_path)
     photo_optimization = (
         None
         if args.no_optimize_photos
-        else kml.PhotoOptimization(
-            max_dimension=args.max_photo_dimension, quality=args.photo_quality
-        )
+        else PhotoOptimization(max_dimension=args.max_photo_dimension, quality=args.photo_quality)
     )
 
     try:
         with zipfile.ZipFile(args.zip_path) as zf:
             export = reader.read_export(zf)
-            summary = kml.write_kmz(
+            summary = html_map.write_html(
                 export, zf, out_path, photo_optimization=photo_optimization
             )
     # MediaJoinError is a SurveyFormatError subclass - it MUST be caught first, or
@@ -113,12 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         f"{counts.get(GeometryType.POLYGON, 0)} boundaries"
     )
     print(f"  {summary.photo_count} photos, {summary.audio_count} audio files embedded")
-    if args.warn_over_mb and size_mb > args.warn_over_mb:
-        print(
-            f"warning: {size_mb:.1f} MB exceeds {args.warn_over_mb:g} MB (Google My "
-            "Maps' upload limit) - try a lower --photo-quality or --max-photo-dimension",
-            file=sys.stderr,
-        )
+    print("  Open it directly in a browser - map tiles need the viewer's own internet")
+    print("  connection, but every photo/audio file is already embedded in the file.")
     return 0
 
 
