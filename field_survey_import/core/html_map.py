@@ -1,7 +1,7 @@
 """Self-contained single-file HTML export - the option for Google My Maps (which
 never renders photos bundled inside a KMZ, only externally-hosted image URLs - see
 core/kml.py's module docstring) or anyone without Google Earth at all. One .html
-file: Leaflet.js + OpenStreetMap tiles loaded from a CDN over the *recipient's* own
+file: Leaflet.js + basemap tiles loaded from a CDN over the *recipient's* own
 internet connection at view time (this module itself makes no network calls, same as
 every other part of core/), with every photo/audio file embedded directly as a
 base64 data: URI - no separate files/ folder, nothing else to keep alongside it.
@@ -28,9 +28,28 @@ from .photo_optimize import DEFAULT_PHOTO_OPTIMIZATION, PhotoOptimization, optim
 
 LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
 LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-_TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+# Two rejected alternatives, both verified empirically (not just assumed) before
+# landing on Esri - see CLAUDE.md for the full story:
+#   - tile.openstreetmap.org: OSM's own tile servers are volunteer-run and block this
+#     file's actual use case (opened as a local file:// page) with a 403 "Access
+#     blocked" tile - confirmed against a real generated .html, even though a plain
+#     curl request to the same URL succeeds from this machine.
+#   - basemaps.cartocdn.com ("CARTO"), the first fix tried: now silently returns a
+#     valid-looking 256x256 PNG stamped "API KEY REQUIRED" instead of a real map on
+#     EVERY request (not just file://) - CARTO's anonymous free tier for this classic
+#     raster endpoint no longer works at all. Caught by actually opening the screenshot,
+#     not just checking the HTTP status code, which was a misleading 200 either way.
+# Esri's basic basemap tiles need no key/signup and are a long-standing common choice
+# for exactly this "embedded/offline app, can't rely on a Referer or an account"
+# scenario - verified by fetching and visually inspecting a real tile (a real map of
+# London, not a placeholder).
+_TILE_URL = (
+    "https://server.arcgisonline.com/ArcGIS/rest/services/"
+    "World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+)
 _TILE_ATTRIBUTION = (
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    "Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, "
+    "NRCAN, Esri Japan, METI, Esri China (Hong Kong), TomTom"
 )
 
 _NAME_TRUNCATE_LEN = 60  # matches core/kml.py's placemark-name convention

@@ -125,12 +125,15 @@ warns about if it's still exceeded. Tune or disable it:
 ```
 
 Converts a Field Survey zip export into a single `.html` file with an interactive map (Leaflet +
-OpenStreetMap) and every photo/audio file embedded directly in the page as base64 data — nothing
-else to keep alongside it. Opens in any browser (just double-click it), which is what makes this
-the option for Google My Maps users or anyone without Google Earth — it sidesteps both the "My Maps
-won't show KMZ photos" limitation above and the "needs Google Earth installed" one. The map tiles
-and the Leaflet library load from a CDN over *the viewer's* own internet connection when they open
-the file; the plugin/this script itself makes no network calls, same as everything else here.
+an Esri basemap, key-free) and every photo/audio file embedded directly in the page as base64
+data — nothing else to keep alongside it. Opens in any browser (just double-click it), which is
+what makes this the option for Google My Maps users or anyone without Google Earth — it sidesteps
+both the "My Maps won't show KMZ photos" limitation above and the "needs Google Earth installed"
+one. The map tiles and the Leaflet library load from a CDN over *the viewer's* own internet
+connection when they open the file; the plugin/this script itself makes no network calls, same as
+everything else here. (Esri, not OpenStreetMap's own tile servers or CARTO's — both were tried and
+rejected: OSM's volunteer-run servers block a `file://`-opened page with a 403, and CARTO's free
+tier now returns an "API key required" placeholder instead of a real tile. See `CLAUDE.md`.)
 
 Takes the same photo-optimization flags as the KMZ export (`--max-photo-dimension`,
 `--photo-quality`, `--no-optimize-photos`) — see above.
