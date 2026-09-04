@@ -21,8 +21,22 @@ from field_survey_import.core.model import (
 )
 from tests.fixtures import build_zips
 
+PIL_Image = pytest.importorskip("PIL.Image")
+
 NS = {"k": kml.KML_NAMESPACE}
 _DUMMY_TIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def _real_jpeg(size: tuple[int, int], *, quality: int = 95) -> bytes:
+    """A genuinely decodable JPEG (unlike the fixtures' fake
+    b'\\xff\\xd8\\xff\\xe0fake-jpeg-bytes' placeholders, which exist to be fast and
+    don't need to survive an actual image decode) - for exercising
+    _optimize_photo_bytes(), which needs real image data to resize/re-encode.
+    """
+    img = PIL_Image.new("RGB", size, color=(90, 140, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
 
 
 @contextmanager
@@ -74,7 +88,7 @@ def _dummy_export(observations, *, name="Dummy session"):
 def test_point_only_export_placemark_count_and_coordinates():
     with _open(build_zips.build_multi_photo_zip()) as zf:
         export = reader.read_export(zf)
-        kml_xml, _manifest = kml.build_kml_document(export, zf)
+        kml_xml, _manifest, _refs = kml.build_kml_document(export, zf)
 
     root = ET.fromstring(kml_xml)
     folders = root.findall(".//k:Folder", NS)
@@ -90,7 +104,7 @@ def test_point_only_export_placemark_count_and_coordinates():
 def test_multi_photo_gallery_img_count_matches_photos_in_order():
     with _open(build_zips.build_multi_photo_zip()) as zf:
         export = reader.read_export(zf)
-        kml_xml, _manifest = kml.build_kml_document(export, zf)
+        kml_xml, _manifest, _refs = kml.build_kml_document(export, zf)
 
     root = ET.fromstring(kml_xml)
     placemarks = root.findall(".//k:Folder[k:name='Points']/k:Placemark", NS)
@@ -101,7 +115,7 @@ def test_multi_photo_gallery_img_count_matches_photos_in_order():
 def test_zero_photo_observation_renders_no_img_tag():
     with _open(build_zips.build_map_point_zip()) as zf:
         export = reader.read_export(zf)
-        kml_xml, _manifest = kml.build_kml_document(export, zf)
+        kml_xml, _manifest, _refs = kml.build_kml_document(export, zf)
 
     root = ET.fromstring(kml_xml)
     description = root.find(".//k:Placemark/k:description", NS).text
@@ -111,7 +125,7 @@ def test_zero_photo_observation_renders_no_img_tag():
 def test_linestring_geometry_serializes_in_order_no_swap():
     with _open(build_zips.build_trace_gaps_zip()) as zf:
         export = reader.read_export(zf)
-        kml_xml, _manifest = kml.build_kml_document(export, zf)
+        kml_xml, _manifest, _refs = kml.build_kml_document(export, zf)
 
     root = ET.fromstring(kml_xml)
     line_obs = next(o for o in export.observations if o.geometry.type is GeometryType.LINE_STRING)
@@ -125,7 +139,7 @@ def test_linestring_geometry_serializes_in_order_no_swap():
 def test_polygon_single_ring_has_only_outer_boundary():
     with _open(build_zips.build_trace_gaps_zip()) as zf:
         export = reader.read_export(zf)
-        kml_xml, _manifest = kml.build_kml_document(export, zf)
+        kml_xml, _manifest, _refs = kml.build_kml_document(export, zf)
 
     root = ET.fromstring(kml_xml)
     polygon = root.find(".//k:Folder[k:name='Boundaries']//k:Polygon", NS)
@@ -147,7 +161,7 @@ def test_polygon_with_multiple_rings_keeps_all_of_them():
 def test_special_characters_do_not_corrupt_xml():
     with _open(build_zips.build_kml_special_chars_zip()) as zf:
         export = reader.read_export(zf)
-        kml_xml, _manifest = kml.build_kml_document(export, zf)
+        kml_xml, _manifest, _refs = kml.build_kml_document(export, zf)
 
     root = ET.fromstring(kml_xml)  # must not raise
     assert root.find("k:Document/k:name", NS).text == "Tricky & <name>"
@@ -221,3 +235,81 @@ def test_kmz_round_trip_end_to_end(tmp_path):
     assert summary.photo_count == 7
     assert summary.audio_count == 0
     assert summary.observation_counts[GeometryType.POINT] == 3
+
+
+def test_optimize_photo_bytes_shrinks_an_oversized_image():
+    original = _real_jpeg((2000, 1500), quality=95)
+    opt = kml.PhotoOptimization(max_dimension=800, quality=70)
+
+    optimized = kml._optimize_photo_bytes(original, opt)
+
+    assert len(optimized) < len(original)
+    with PIL_Image.open(io.BytesIO(optimized)) as img:
+        assert max(img.size) <= 800
+
+
+def test_optimize_photo_bytes_never_upscales_a_smaller_image():
+    original = _real_jpeg((200, 150), quality=90)
+    opt = kml.PhotoOptimization(max_dimension=1600, quality=90)
+
+    optimized = kml._optimize_photo_bytes(original, opt)
+
+    with PIL_Image.open(io.BytesIO(optimized)) as img:
+        assert img.size == (200, 150)  # unchanged - thumbnail() never enlarges
+
+
+def test_optimize_photo_bytes_never_makes_output_larger():
+    # A tiny, already low-quality image: re-encoding it at "better" settings than it
+    # already has can produce MORE bytes, not fewer - optimisation must fall back to
+    # the original rather than silently making things worse.
+    original = _real_jpeg((32, 32), quality=10)
+    opt = kml.PhotoOptimization(max_dimension=1600, quality=95)
+
+    optimized = kml._optimize_photo_bytes(original, opt)
+
+    assert len(optimized) <= len(original)
+
+
+def test_optimize_photo_bytes_falls_back_on_undecodable_data():
+    garbage = b"\xff\xd8\xff\xe0fake-jpeg-bytes"  # not a real, decodable JPEG
+
+    optimized = kml._optimize_photo_bytes(garbage, kml.PhotoOptimization())
+
+    assert optimized == garbage  # unchanged, no exception
+
+
+def test_write_kmz_downscales_photos_by_default(tmp_path):
+    obs = _dummy_obs(photo="big.jpg")
+    export = _dummy_export([obs])
+    original = _real_jpeg((2000, 1500), quality=95)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("photos/big.jpg", original)
+    out_path = tmp_path / "out.kmz"
+
+    with zipfile.ZipFile(buf) as zf:
+        summary = kml.write_kmz(export, zf, out_path)
+
+    with zipfile.ZipFile(out_path) as out:
+        embedded = out.read("files/big.jpg")
+    assert len(embedded) < len(original)
+    with PIL_Image.open(io.BytesIO(embedded)) as img:
+        assert max(img.size) <= kml.PhotoOptimization().max_dimension
+    assert summary.output_size_bytes == out_path.stat().st_size
+
+
+def test_write_kmz_no_optimization_embeds_photo_unchanged(tmp_path):
+    obs = _dummy_obs(photo="big.jpg")
+    export = _dummy_export([obs])
+    original = _real_jpeg((2000, 1500), quality=95)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("photos/big.jpg", original)
+    out_path = tmp_path / "out.kmz"
+
+    with zipfile.ZipFile(buf) as zf:
+        kml.write_kmz(export, zf, out_path, photo_optimization=None)
+
+    with zipfile.ZipFile(out_path) as out:
+        embedded = out.read("files/big.jpg")
+    assert embedded == original

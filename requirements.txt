@@ -1,0 +1,5 @@
+# For the pure-core .venv (see CLAUDE.md / README.md "Development setup"). Only
+# scripts/export_kml.py needs Pillow, for downscaling/recompressing photos before
+# embedding them in a .kmz - field_survey_import/core stays otherwise dependency-free,
+# and the QGIS plugin itself never imports Pillow.
+Pillow>=10

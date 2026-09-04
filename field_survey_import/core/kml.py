@@ -1,10 +1,14 @@
 """Pure-Python KML/KMZ builder for sharing a Field Survey export with non-specialist
 GIS tools (Google Earth / Google Maps) - see scripts/export_kml.py for the CLI entry
-point. Zero qgis/PyQt5 imports (tests/test_core_has_no_qgis_imports.py) and zero
-third-party dependencies - hand-assembled string templates rather than
+point. Zero qgis/PyQt5 imports (tests/test_core_has_no_qgis_imports.py). The KML/XML
+side is still zero-dependency - hand-assembled string templates rather than
 xml.etree.ElementTree, matching the existing precedent of qgis/forms.py's expression
 strings: ElementTree can't emit CDATA sections, and pulling in lxml/simplekml would be
-this project's first third-party dependency for a feature that doesn't need one.
+an unnecessary dependency for a feature that doesn't need one. Photo downscaling
+(`_optimize_photo_bytes`) is this project's one real third-party dependency, Pillow -
+see that function's docstring for why, and note the import is lazy (inside the
+function) specifically so importing this module at all never requires Pillow to be
+installed, only actually calling it does.
 
 Scope (v1): plain observation export only. Revisit / then-vs-now photo comparison
 (qgis/revisit.py's ref_obs_id<->obs_id resolution, handoff §7) is QGIS-side and out of
@@ -20,6 +24,7 @@ optimises for that.
 """
 from __future__ import annotations  # `X | None` unions must stay lazy on Python 3.9
 
+import io
 import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -194,10 +199,14 @@ def _placemark_kml(
     )
 
 
-def build_kml_document(export: SurveyExport, zf: zipfile.ZipFile) -> tuple[str, dict[str, str]]:
-    """Returns (kml_xml_string, media_manifest). The manifest is returned rather than
-    recomputed by write_kmz(), so callers/tests can assert on exactly which zip_entry
-    maps to which KMZ-internal path without re-parsing the KML. Propagates
+def build_kml_document(
+    export: SurveyExport, zf: zipfile.ZipFile
+) -> tuple[str, dict[str, str], dict[str, MediaRef]]:
+    """Returns (kml_xml_string, media_manifest, ref_by_entry). The manifest is
+    returned rather than recomputed by write_kmz(), so callers/tests can assert on
+    exactly which zip_entry maps to which KMZ-internal path without re-parsing the
+    KML; ref_by_entry lets write_kmz() tell photos (worth downscaling) from audio
+    (embedded as-is) without re-deriving that from the manifest's paths. Propagates
     MediaJoinError from resolve_media() unchanged - a referenced photo genuinely
     missing from the zip should stop the export, not silently drop it.
     """
@@ -209,6 +218,7 @@ def build_kml_document(export: SurveyExport, zf: zipfile.ZipFile) -> tuple[str, 
         if audio_ref is not None:
             all_refs.append(audio_ref)
     manifest = build_media_manifest(all_refs)
+    ref_by_entry = {ref.zip_entry: ref for ref in all_refs}
 
     by_type: dict[GeometryType, list[str]] = {t: [] for t in GeometryType}
     for obs in export.observations:
@@ -227,7 +237,61 @@ def build_kml_document(export: SurveyExport, zf: zipfile.ZipFile) -> tuple[str, 
         f"<Document><name>{_escape_text(export.session.name)}</name>{folders}</Document>"
         "</kml>"
     )
-    return kml_xml, manifest
+    return kml_xml, manifest, ref_by_entry
+
+
+@dataclass(frozen=True)
+class PhotoOptimization:
+    """Downscale/recompress settings for embedded photos. The balloon HTML only ever
+    displays a photo at 400px (single hero) or 160px (gallery thumbnail) wide
+    (_gallery_html) - a phone's full-resolution original (often 1600px+ and several
+    hundred KB) is wasted size with no visible benefit, and is usually what pushes a
+    multi-photo session's .kmz over Google My Maps' 5MB upload limit. Defaults leave
+    generous headroom over even a 2x-retina render of the largest (400px) display
+    size while cutting a typical 1600x1200 phone JPEG by roughly 4-5x.
+    """
+
+    max_dimension: int = 1024
+    quality: int = 75
+
+
+DEFAULT_PHOTO_OPTIMIZATION = PhotoOptimization()
+
+
+def _optimize_photo_bytes(data: bytes, opt: PhotoOptimization) -> bytes:
+    """Downscale (never upscale - Image.thumbnail is a no-op on a smaller image) and
+    re-encode a photo as JPEG. Imports Pillow lazily, inside this function, so this
+    module stays importable without Pillow installed - only actually optimizing a
+    photo needs it (scripts/export_kml.py's --no-optimize-photos skips this entirely).
+
+    ImageOps.exif_transpose() bakes in the EXIF Orientation tag as real pixel
+    rotation before re-encoding: Image.save() below doesn't carry EXIF over from the
+    source (Pillow only writes EXIF when explicitly told to), so without this step a
+    photo taken in portrait could be re-saved sideways. Losing the rest of the EXIF
+    block (camera make/model, GPS) is a deliberate side effect, not a bug - none of
+    it is needed once the surveyor's own recorded lat/lon is already in the
+    placemark, and dropping it is a small privacy win for a file meant to be shared.
+
+    Falls back to the original bytes, unchanged, if Pillow can't decode the image
+    (corrupt file, or a format Pillow doesn't handle) or if re-encoding somehow
+    produces something no smaller than the original - optimisation must never make
+    the output worse, and one bad photo must never fail the whole export.
+    """
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return data
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img = ImageOps.exif_transpose(img)
+            img = img.convert("RGB")  # drop alpha/CMYK/palette oddities for JPEG output
+            img.thumbnail((opt.max_dimension, opt.max_dimension), Image.Resampling.LANCZOS)
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=opt.quality, optimize=True)
+            optimized = out.getvalue()
+    except Exception:
+        return data
+    return optimized if len(optimized) < len(data) else data
 
 
 @dataclass(frozen=True)
@@ -236,18 +300,31 @@ class KmzSummary:
     observation_counts: dict[GeometryType, int]
     photo_count: int
     audio_count: int
+    output_size_bytes: int
 
 
-def write_kmz(export: SurveyExport, zf: zipfile.ZipFile, out_path: Path) -> KmzSummary:
+def write_kmz(
+    export: SurveyExport,
+    zf: zipfile.ZipFile,
+    out_path: Path,
+    *,
+    photo_optimization: PhotoOptimization | None = DEFAULT_PHOTO_OPTIMIZATION,
+) -> KmzSummary:
     """Build doc.kml and write it plus every referenced photo/audio file into a single
     .kmz at out_path, copying bytes straight out of the source zip
-    (zf.read(ref.zip_entry)) - never extracting to a temp directory on disk.
+    (zf.read(ref.zip_entry)) - never extracting to a temp directory on disk. Photos
+    (not audio) are downscaled/recompressed per `photo_optimization` unless it's
+    None (embed originals unchanged).
     """
-    kml_xml, manifest = build_kml_document(export, zf)
+    kml_xml, manifest, ref_by_entry = build_kml_document(export, zf)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
         out.writestr("doc.kml", kml_xml)
         for zip_entry, kmz_path in manifest.items():
-            out.writestr(kmz_path, zf.read(zip_entry))
+            data = zf.read(zip_entry)
+            ref = ref_by_entry[zip_entry]
+            if photo_optimization is not None and ref.kind == "photo":
+                data = _optimize_photo_bytes(data, photo_optimization)
+            out.writestr(kmz_path, data)
 
     counts: dict[GeometryType, int] = {t: 0 for t in GeometryType}
     photo_count = audio_count = 0
@@ -262,4 +339,5 @@ def write_kmz(export: SurveyExport, zf: zipfile.ZipFile, out_path: Path) -> KmzS
         observation_counts=counts,
         photo_count=photo_count,
         audio_count=audio_count,
+        output_size_bytes=out_path.stat().st_size,
     )
