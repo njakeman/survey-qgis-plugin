@@ -8,6 +8,8 @@ __pycache__/
 # Build/packaging output
 /dist/
 *.zip.tmp
+# scripts/export_kml.py output - a generated deliverable, not source
+*.kmz
 
 # QGIS scratch files sometimes dropped alongside test GeoPackages
 *.gpkg-shm

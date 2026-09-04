@@ -93,6 +93,18 @@ they can't silently drift from what's shipped without a test noticing (`tests/qg
 Writes `dist/field_survey_import-<version>.zip` (version read from `metadata.txt`) with the single
 top-level `field_survey_import/` folder QGIS's "Install from ZIP" expects.
 
+### Sharing a session as KMZ
+
+```powershell
+.venv\Scripts\python.exe scripts\export_kml.py path\to\export.zip
+```
+
+Converts a Field Survey zip export into a single `.kmz` with every photo embedded, for sharing
+with anyone using Google Earth (desktop/web/mobile) — no QGIS or the plugin needed on either end.
+Runs standalone under the plain `.venv`, since `core/` has no QGIS dependency. Google My Maps
+typically won't render KMZ-embedded photos in its balloons (only externally-hosted image URLs);
+Google Earth renders them fine.
+
 ## Architecture
 
 ```
