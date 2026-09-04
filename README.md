@@ -124,16 +124,27 @@ warns about if it's still exceeded. Tune or disable it:
 .venv\Scripts\python.exe scripts\export_html.py path\to\export.zip
 ```
 
-Converts a Field Survey zip export into a single `.html` file with an interactive map (Leaflet +
-an Esri basemap, key-free) and every photo/audio file embedded directly in the page as base64
-data — nothing else to keep alongside it. Opens in any browser (just double-click it), which is
-what makes this the option for Google My Maps users or anyone without Google Earth — it sidesteps
-both the "My Maps won't show KMZ photos" limitation above and the "needs Google Earth installed"
-one. The map tiles and the Leaflet library load from a CDN over *the viewer's* own internet
-connection when they open the file; the plugin/this script itself makes no network calls, same as
-everything else here. (Esri, not OpenStreetMap's own tile servers or CARTO's — both were tried and
-rejected: OSM's volunteer-run servers block a `file://`-opened page with a 403, and CARTO's free
-tier now returns an "API key required" placeholder instead of a real tile. See `CLAUDE.md`.)
+Converts a Field Survey zip export into a single `.html` file with an interactive map (Leaflet)
+and every photo/audio file embedded directly in the page as base64 data — nothing else to keep
+alongside it. Opens in any browser (just double-click it), which is what makes this the option for
+Google My Maps users or anyone without Google Earth — it sidesteps both the "My Maps won't show
+KMZ photos" limitation above and the "needs Google Earth installed" one. The basemap and the
+Leaflet library load from a CDN over *the viewer's* own internet connection when they open the
+file; the plugin/this script itself makes no network calls, same as everything else here.
+
+Basemap defaults to **OpenFreeMap**'s `liberty` vector style (`--basemap openfreemap-liberty`);
+`openfreemap-bright` and `openfreemap-positron` are the same provider's other published styles.
+These need a WebGL-capable browser. `--basemap esri` switches to a plain raster tile fallback that
+needs no WebGL and works everywhere, at the cost of a plainer-looking map:
+
+```powershell
+.venv\Scripts\python.exe scripts\export_html.py path\to\export.zip --basemap openfreemap-bright
+.venv\Scripts\python.exe scripts\export_html.py path\to\export.zip --basemap esri
+```
+
+(Two earlier raster choices were tried and rejected before landing here — OpenStreetMap's own tile
+servers block a `file://`-opened page with a 403, and CARTO's free tier now returns an "API key
+required" placeholder instead of a real tile. See `CLAUDE.md`.)
 
 Takes the same photo-optimization flags as the KMZ export (`--max-photo-dimension`,
 `--photo-quality`, `--no-optimize-photos`) — see above.

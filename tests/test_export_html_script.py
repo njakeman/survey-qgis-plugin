@@ -85,6 +85,40 @@ def test_custom_output_path(tmp_path):
     assert out_path.exists()
 
 
+def test_basemap_flag_defaults_to_openfreemap_liberty(tmp_path):
+    zip_path = tmp_path / "export.zip"
+    zip_path.write_bytes(build_zips.build_map_point_zip())
+
+    exit_code = export_html.main([str(zip_path)])
+
+    assert exit_code == 0
+    html = zip_path.with_suffix(".html").read_text(encoding="utf-8")
+    assert "styles/liberty" in html
+
+
+def test_basemap_flag_esri_wires_through(tmp_path):
+    zip_path = tmp_path / "export.zip"
+    zip_path.write_bytes(build_zips.build_map_point_zip())
+
+    exit_code = export_html.main([str(zip_path), "--basemap", "esri"])
+
+    assert exit_code == 0
+    html = zip_path.with_suffix(".html").read_text(encoding="utf-8")
+    assert "server.arcgisonline.com" in html
+    assert "maplibre" not in html.lower()
+
+
+def test_invalid_basemap_choice_exits_via_argparse(tmp_path, capsys):
+    zip_path = tmp_path / "export.zip"
+    zip_path.write_bytes(build_zips.build_map_point_zip())
+
+    with pytest.raises(SystemExit) as exc_info:
+        export_html.main([str(zip_path), "--basemap", "not-a-real-basemap"])
+
+    assert exc_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
 def test_non_zip_file_exits_nonzero(tmp_path, capsys):
     bogus = tmp_path / "not-a-zip.zip"
     bogus.write_bytes(b"not a zip file")

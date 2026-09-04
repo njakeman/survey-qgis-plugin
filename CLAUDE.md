@@ -78,7 +78,9 @@ field_survey_import/
 │                            templates, no XML/KML dependency (ElementTree can't emit CDATA)
 │                html_map.py zip -> self-contained HTML+Leaflet map (scripts/export_html.py's
 │                            engine) - for Google My Maps, which never renders a KMZ's embedded
-│                            photos; photos go in as base64 data: URIs instead
+│                            photos; photos go in as base64 data: URIs instead. BASEMAPS is a
+│                            small registry (OpenFreeMap vector styles by default, plus a plain
+│                            Esri raster fallback) selected via --basemap
 │                photo_optimize.py  downscale/recompress before embedding (kml.py and
 │                            html_map.py both use it) - Pillow, this project's one dependency,
 │                            imported lazily so the module stays importable without it
@@ -221,9 +223,10 @@ builders can't rot silently, they're exercised on every load either way (see
   specifically is the target, `core/html_map.py`'s self-contained HTML (photos as base64 data:
   URIs, no bundled-file reference at all) is the answer - don't spend time trying to make My Maps
   cooperate with a KMZ's file references, it structurally can't.
-- **`core/html_map.py`'s basemap tiles come from Esri (`server.arcgisonline.com`), not
-  `tile.openstreetmap.org` or CARTO, and both rejected alternatives were verified empirically, not
-  assumed** — don't "fix" this back to the more obvious/canonical OSM URL without re-reading this:
+- **`core/html_map.py`'s `BASEMAPS` registry defaults to OpenFreeMap's vector styles, with a
+  plain Esri raster layer as the `--basemap esri` fallback - two other raster providers were tried
+  and rejected first, both verified empirically, not assumed** — don't "fix" this back to the more
+  obvious/canonical OSM URL without re-reading this:
   - `tile.openstreetmap.org`: confirmed against a real generated `.html` opened by double-click (a
     `file://` page) - OSM's volunteer-run tile servers return a 403 "Access blocked" tile for
     exactly that "opened as a local file, not served from a normal site" pattern, even though a
@@ -231,15 +234,39 @@ builders can't rot silently, they're exercised on every load either way (see
     User-Agent) succeeds from this machine. The block is specific to how a real browser requests
     tiles from `file://` and is not reproducible with a simple HTTP client - don't trust a curl
     check alone to clear this URL.
-  - `basemaps.cartocdn.com` ("CARTO"), the first fix tried: returns a genuine, correctly-sized
-    256x256 PNG with **HTTP 200** on every request now, but the image itself is a placeholder
-    stamped "API KEY REQUIRED" rather than a real tile - their anonymous free tier for this classic
-    raster endpoint has been discontinued. This was only caught by opening the actual screenshot;
-    checking the HTTP status code alone (200, looked fine) would have missed it entirely. **Lesson:
-    verifying a tile/asset URL means inspecting the decoded image content, not just the status
-    code.**
+  - `basemaps.cartocdn.com` ("CARTO"): returns a genuine, correctly-sized 256x256 PNG with **HTTP
+    200** on every request now, but the image itself is a placeholder stamped "API KEY REQUIRED"
+    rather than a real tile - their anonymous free tier for this classic raster endpoint has been
+    discontinued. This was only caught by opening the actual screenshot; checking the HTTP status
+    code alone (200, looked fine) would have missed it entirely. **Lesson: verifying a tile/asset
+    URL means inspecting the decoded image content, not just the status code.**
   - Esri's basic tile services need no API key/signup and are a long-standing common choice for
     exactly this "embedded/offline app, can't rely on a Referer or an account" scenario - verified
     the same way (fetched a real tile, opened it, confirmed it was an actual map). Its URL path
     order is `{z}/{y}/{x}`, not `{z}/{x}/{y}` like OSM/CARTO/most other providers - and it has no
     `{s}` subdomain or `{r}` retina placeholder, so `detectRetina` is not set for this layer.
+  - `tiles.openfreemap.org`'s style endpoints serve with `Access-Control-Allow-Origin: *`
+    (verified directly) - a real, checkable access-control guarantee for the `fetch()`-based
+    loading MapLibre GL uses, unlike the Referer-based blocking that sank the OSM raster attempt.
+    This is why it's the default despite being newer/less battle-tested than Esri: the CORS
+    header is actual evidence it should work from a `file://`/null-origin page, not a guess.
+  - MapLibre GL is WebGL-based - the one real trade-off of the OpenFreeMap styles vs. Esri's
+    plain raster tiles, which need no WebGL and work everywhere. `L.maplibreGL(...)` (registered
+    by the `@maplibre/maplibre-gl-leaflet` bridge script) needs both `L` and `maplibregl` to
+    already exist as globals, so script tag order matters: Leaflet's own `<script>` first, then
+    `maplibre-gl`, then the bridge - confirmed by downloading and reading the bridge's actual
+    source rather than assuming its call shape from docs alone.
+- **A MapLibre GL basemap can screenshot as a blank (but correctly-attributed/coloured) map via
+  the `mcp__claude-in-chrome__*` browser automation tools, even when every underlying resource is
+  genuinely fine** — verified while adding OpenFreeMap: style JSON, TileJSON, sprite, glyphs, and
+  a manually-`curl`'d vector tile (a real 22KB `.pbf`, `200`, correct MIME) all loaded correctly,
+  `map.getZoom()`/`getCenter()` were correct, `isSourceLoaded()` returned `true`, no `error` event
+  fired - yet zero actual tile requests appeared in the network log, in both the real export *and*
+  a bare vanilla MapLibre GL page with no Leaflet/bridge/plugin code involved at all. Root cause:
+  `document.hidden`/`visibilityState` were `true`/`"hidden"` and `document.hasFocus()` was `false`
+  in that automated tab - Chrome throttles/withholds the `requestAnimationFrame`-driven work
+  MapLibre's tile scheduler depends on for a backgrounded tab, which doesn't affect Leaflet's
+  plain `<img>`-based raster tile layers (Esri rendered fine in screenshots under the identical
+  condition). **Don't conclude a vector basemap is broken from a blank automation screenshot alone
+  - check `document.visibilityState`/`hasFocus()` first**, and treat a real user opening the file
+  in a normal focused tab as the authoritative test.
