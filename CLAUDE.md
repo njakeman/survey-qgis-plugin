@@ -49,6 +49,7 @@ Python ships no `pytest`:
 .\scripts\package.ps1
 
 # Share a session as a KMZ (Google Earth/Google Maps) - standalone, no QGIS needed
+# (needs Pillow: .venv\Scripts\python.exe -m pip install -r requirements.txt)
 .venv\Scripts\python.exe scripts\export_kml.py <zip> [-o out.kmz]
 ```
 
@@ -192,3 +193,10 @@ builders can't rot silently, they're exercised on every load either way (see
   effect of escaping `>`, it also turns any `]]>` in a surveyor's note into `]]&gt;`, neutralising
   the one thing that would otherwise truncate the CDATA section early. Don't remove it on the
   theory that "CDATA doesn't need escaping" - that's true for the XML layer only.
+- **Pillow (`core/kml.py::_optimize_photo_bytes`) doesn't carry EXIF over on `Image.save()`
+  unless you explicitly pass it back in** — so a photo's EXIF Orientation tag is silently lost on
+  re-encode, and without correcting for that first, a portrait photo re-saves sideways.
+  `ImageOps.exif_transpose()` must run before the resize/save, to bake the rotation into the pixels
+  themselves. The import is deliberately lazy (inside the function, not at module level) so
+  `core/kml.py` stays importable without Pillow installed - only actually optimizing a photo
+  needs it.

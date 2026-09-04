@@ -39,9 +39,12 @@ Two separate Python environments are involved, because the plugin's pure-Python 
 without QGIS installed, and QGIS's own Python has no `pytest`:
 
 ```powershell
-# Pure-core venv (standalone Python 3.12, plain pytest + ruff)
+# Pure-core venv (standalone Python 3.12, plain pytest + ruff, plus requirements.txt
+# for scripts/export_kml.py's photo downscaling - Pillow is the plugin's only
+# third-party dependency, and only that one script uses it)
 py -m venv .venv
 .venv\Scripts\python.exe -m pip install pytest ruff
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 
 # QGIS-dependent tests run through the QGIS interpreter directly - no venv needed,
 # scripts/run-qgis-tests.ps1 installs pytest into it (--user, no elevation) on first run.
@@ -101,9 +104,18 @@ top-level `field_survey_import/` folder QGIS's "Install from ZIP" expects.
 
 Converts a Field Survey zip export into a single `.kmz` with every photo embedded, for sharing
 with anyone using Google Earth (desktop/web/mobile) — no QGIS or the plugin needed on either end.
-Runs standalone under the plain `.venv`, since `core/` has no QGIS dependency. Google My Maps
-typically won't render KMZ-embedded photos in its balloons (only externally-hosted image URLs);
-Google Earth renders them fine.
+Runs standalone under the plain `.venv`. Google My Maps typically won't render KMZ-embedded photos
+in its balloons (only externally-hosted image URLs); Google Earth renders them fine.
+
+Photos are downscaled/recompressed by default before embedding (a balloon only ever displays one
+at 400px or 160px wide, so a phone's full-resolution original is wasted size) — this is usually
+what keeps a multi-photo session's `.kmz` under Google My Maps' 5MB upload limit, which the script
+warns about if it's still exceeded. Tune or disable it:
+
+```powershell
+.venv\Scripts\python.exe scripts\export_kml.py path\to\export.zip --max-photo-dimension 800 --photo-quality 60
+.venv\Scripts\python.exe scripts\export_kml.py path\to\export.zip --no-optimize-photos
+```
 
 ## Architecture
 
