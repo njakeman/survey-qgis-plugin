@@ -104,8 +104,9 @@ top-level `field_survey_import/` folder QGIS's "Install from ZIP" expects.
 
 Converts a Field Survey zip export into a single `.kmz` with every photo embedded, for sharing
 with anyone using Google Earth (desktop/web/mobile) — no QGIS or the plugin needed on either end.
-Runs standalone under the plain `.venv`. Google My Maps typically won't render KMZ-embedded photos
-in its balloons (only externally-hosted image URLs); Google Earth renders them fine.
+Runs standalone under the plain `.venv`. **Google My Maps does not render photos embedded in a
+KMZ's balloons at all**, regardless of file size — only externally-hosted image URLs. If My Maps
+specifically is where you're sharing this, use the HTML export below instead.
 
 Photos are downscaled/recompressed by default before embedding (a balloon only ever displays one
 at 400px or 160px wide, so a phone's full-resolution original is wasted size) — this is usually
@@ -116,6 +117,23 @@ warns about if it's still exceeded. Tune or disable it:
 .venv\Scripts\python.exe scripts\export_kml.py path\to\export.zip --max-photo-dimension 800 --photo-quality 60
 .venv\Scripts\python.exe scripts\export_kml.py path\to\export.zip --no-optimize-photos
 ```
+
+### Sharing a session as a self-contained HTML map
+
+```powershell
+.venv\Scripts\python.exe scripts\export_html.py path\to\export.zip
+```
+
+Converts a Field Survey zip export into a single `.html` file with an interactive map (Leaflet +
+OpenStreetMap) and every photo/audio file embedded directly in the page as base64 data — nothing
+else to keep alongside it. Opens in any browser (just double-click it), which is what makes this
+the option for Google My Maps users or anyone without Google Earth — it sidesteps both the "My Maps
+won't show KMZ photos" limitation above and the "needs Google Earth installed" one. The map tiles
+and the Leaflet library load from a CDN over *the viewer's* own internet connection when they open
+the file; the plugin/this script itself makes no network calls, same as everything else here.
+
+Takes the same photo-optimization flags as the KMZ export (`--max-photo-dimension`,
+`--photo-quality`, `--no-optimize-photos`) — see above.
 
 ## Architecture
 

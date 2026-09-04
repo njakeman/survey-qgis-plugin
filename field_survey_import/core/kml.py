@@ -4,11 +4,11 @@ point. Zero qgis/PyQt5 imports (tests/test_core_has_no_qgis_imports.py). The KML
 side is still zero-dependency - hand-assembled string templates rather than
 xml.etree.ElementTree, matching the existing precedent of qgis/forms.py's expression
 strings: ElementTree can't emit CDATA sections, and pulling in lxml/simplekml would be
-an unnecessary dependency for a feature that doesn't need one. Photo downscaling
-(`_optimize_photo_bytes`) is this project's one real third-party dependency, Pillow -
-see that function's docstring for why, and note the import is lazy (inside the
-function) specifically so importing this module at all never requires Pillow to be
-installed, only actually calling it does.
+an unnecessary dependency for a feature that doesn't need one. Photo downscaling is
+this project's one real third-party dependency, Pillow - see photo_optimize.py
+(shared with core/html_map.py's self-contained-HTML export) for why, and note its
+import is lazy so importing this module at all never requires Pillow installed, only
+actually optimizing a photo does.
 
 Scope (v1): plain observation export only. Revisit / then-vs-now photo comparison
 (qgis/revisit.py's ref_obs_id<->obs_id resolution, handoff §7) is QGIS-side and out of
@@ -17,14 +17,15 @@ then-vs-now logic. No custom or heading-rotated icons either - Google Earth's bu
 default pin only, so nothing needs bundling or a network fetch (a possible future
 enhancement, not built here).
 
-Known, documented limitation of the output itself: Google My Maps' importer typically
-does not render images embedded in a KMZ's balloon HTML, only externally-hosted image
-URLs. Google Earth (desktop/web/mobile) renders embedded KMZ images fine - this module
-optimises for that.
+Known, documented limitation of the output itself: Google My Maps' importer does not
+render images embedded in a KMZ's balloon HTML at all, regardless of file size or
+structure - only externally-hosted image URLs. Google Earth (desktop/web/mobile)
+renders embedded KMZ images fine - this module optimises for that. If My Maps
+specifically is the target, see core/html_map.py instead (a self-contained HTML file
+with photos embedded as data URIs - works in any browser, not just Earth).
 """
 from __future__ import annotations  # `X | None` unions must stay lazy on Python 3.9
 
-import io
 import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -34,6 +35,13 @@ from xml.sax.saxutils import escape as _xml_escape
 
 from .media import MediaRef, resolve_media
 from .model import Geometry, GeometryType, Observation, SurveyExport
+from .photo_optimize import (
+    DEFAULT_PHOTO_OPTIMIZATION,
+    PhotoOptimization,
+)
+from .photo_optimize import (
+    optimize_photo_bytes as _optimize_photo_bytes,
+)
 
 KML_NAMESPACE = "http://www.opengis.net/kml/2.2"
 
@@ -238,60 +246,6 @@ def build_kml_document(
         "</kml>"
     )
     return kml_xml, manifest, ref_by_entry
-
-
-@dataclass(frozen=True)
-class PhotoOptimization:
-    """Downscale/recompress settings for embedded photos. The balloon HTML only ever
-    displays a photo at 400px (single hero) or 160px (gallery thumbnail) wide
-    (_gallery_html) - a phone's full-resolution original (often 1600px+ and several
-    hundred KB) is wasted size with no visible benefit, and is usually what pushes a
-    multi-photo session's .kmz over Google My Maps' 5MB upload limit. Defaults leave
-    generous headroom over even a 2x-retina render of the largest (400px) display
-    size while cutting a typical 1600x1200 phone JPEG by roughly 4-5x.
-    """
-
-    max_dimension: int = 1024
-    quality: int = 75
-
-
-DEFAULT_PHOTO_OPTIMIZATION = PhotoOptimization()
-
-
-def _optimize_photo_bytes(data: bytes, opt: PhotoOptimization) -> bytes:
-    """Downscale (never upscale - Image.thumbnail is a no-op on a smaller image) and
-    re-encode a photo as JPEG. Imports Pillow lazily, inside this function, so this
-    module stays importable without Pillow installed - only actually optimizing a
-    photo needs it (scripts/export_kml.py's --no-optimize-photos skips this entirely).
-
-    ImageOps.exif_transpose() bakes in the EXIF Orientation tag as real pixel
-    rotation before re-encoding: Image.save() below doesn't carry EXIF over from the
-    source (Pillow only writes EXIF when explicitly told to), so without this step a
-    photo taken in portrait could be re-saved sideways. Losing the rest of the EXIF
-    block (camera make/model, GPS) is a deliberate side effect, not a bug - none of
-    it is needed once the surveyor's own recorded lat/lon is already in the
-    placemark, and dropping it is a small privacy win for a file meant to be shared.
-
-    Falls back to the original bytes, unchanged, if Pillow can't decode the image
-    (corrupt file, or a format Pillow doesn't handle) or if re-encoding somehow
-    produces something no smaller than the original - optimisation must never make
-    the output worse, and one bad photo must never fail the whole export.
-    """
-    try:
-        from PIL import Image, ImageOps
-    except ImportError:
-        return data
-    try:
-        with Image.open(io.BytesIO(data)) as img:
-            img = ImageOps.exif_transpose(img)
-            img = img.convert("RGB")  # drop alpha/CMYK/palette oddities for JPEG output
-            img.thumbnail((opt.max_dimension, opt.max_dimension), Image.Resampling.LANCZOS)
-            out = io.BytesIO()
-            img.save(out, format="JPEG", quality=opt.quality, optimize=True)
-            optimized = out.getvalue()
-    except Exception:
-        return data
-    return optimized if len(optimized) < len(data) else data
 
 
 @dataclass(frozen=True)
