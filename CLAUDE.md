@@ -53,6 +53,11 @@ Python ships no `pytest`:
 # (needs Pillow: .venv\Scripts\python.exe -m pip install -r requirements.txt)
 .venv\Scripts\python.exe scripts\export_kml.py <zip> [-o out.kmz]
 .venv\Scripts\python.exe scripts\export_html.py <zip> [-o out.html]
+
+# Share a session as a zip of spreadsheet (.xlsx + .csv, curated columns) + original photos,
+# optionally bundling extra files such as the .html map (needs openpyxl + tzdata from
+# requirements.txt)
+.venv\Scripts\python.exe scripts\export_spreadsheet.py <zip> [-o out.zip] [--name basename] [--include file ...]
 ```
 
 QGIS 3.44.8 LTR lives at `C:\Program Files\QGIS 3.44.8`; nothing QGIS-related is on PATH, so every
@@ -81,9 +86,14 @@ field_survey_import/
 │                            photos; photos go in as base64 data: URIs instead. BASEMAPS is a
 │                            small registry (OpenFreeMap vector styles by default, plus a plain
 │                            Esri raster fallback) selected via --basemap
+│                spreadsheet.py zip -> zip of <name>.xlsx + <name>.csv (curated columns:
+│                            note/lat/lon/os_grid_ref/photo/heading_deg + derived 16-point
+│                            `direction` + recorded_date/recorded_time in local time) +
+│                            original photos + --include'd extras (scripts/
+│                            export_spreadsheet.py's engine). openpyxl imported lazily
 │                photo_optimize.py  downscale/recompress before embedding (kml.py and
-│                            html_map.py both use it) - Pillow, this project's one dependency,
-│                            imported lazily so the module stays importable without it
+│                            html_map.py both use it) - Pillow, imported lazily so the module
+│                            stays importable without it
 ├── qgis/        QGIS API layer, no UI code
 │                import_flow.py   THE single import entry point - toolbar dialog and the
 │                                 Processing algorithm both call import_zip() and nothing else
@@ -203,6 +213,13 @@ builders can't rot silently, they're exercised on every load either way (see
   effect of escaping `>`, it also turns any `]]>` in a surveyor's note into `]]&gt;`, neutralising
   the one thing that would otherwise truncate the CDATA section early. Don't remove it on the
   theory that "CDATA doesn't need escaping" - that's true for the XML layer only.
+- **`zoneinfo.ZoneInfo("Europe/London")` raises `ZoneInfoNotFoundError` on this Windows
+  venv unless the `tzdata` pip package is installed** — Windows ships no system tz database for
+  the stdlib to fall back on (Linux/macOS do). It's in `requirements.txt` for
+  `core/spreadsheet.py`'s local-time conversion; `scripts/export_spreadsheet.py` catches the
+  error and points at `pip install -r requirements.txt`. Also: `compass_direction()` uses
+  `floor(x + half_sector)` rather than `round()` on purpose — `round()` is banker's rounding,
+  so an exact sector boundary like 11.25° would land on `n` instead of `nne`.
 - **Pillow (`core/photo_optimize.py::optimize_photo_bytes`) doesn't carry EXIF over on
   `Image.save()` unless you explicitly pass it back in** — so a photo's EXIF Orientation tag is
   silently lost on re-encode, and without correcting for that first, a portrait photo re-saves
