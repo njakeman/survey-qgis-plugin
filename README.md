@@ -149,6 +149,27 @@ required" placeholder instead of a real tile. See `CLAUDE.md`.)
 Takes the same photo-optimization flags as the KMZ export (`--max-photo-dimension`,
 `--photo-quality`, `--no-optimize-photos`) — see above.
 
+### Sharing a session as a spreadsheet + photos bundle
+
+```powershell
+.venv\Scripts\python.exe scripts\export_spreadsheet.py path	o\export.zip
+```
+
+For recipients who just want the photos and a spreadsheet, no map at all. Writes one zip holding
+`<name>.xlsx` and `<name>.csv` (a curated subset of the observation properties: `note`, `lat`,
+`lon`, `os_grid_ref`, `photo`, `heading_deg`, a 16-point compass `direction` derived from the
+heading, and `recorded_date`/`recorded_time` in local time — `Europe/London` by default,
+`--timezone` to change), every photo under `photos/` at its original size, and any extra files
+you pass with `--include` (repeatable) — typically the HTML map from the export above, so one zip
+carries everything. `--name` sets the spreadsheet basename inside the bundle (default: the output
+zip's stem). Needs `openpyxl` and `tzdata` from `requirements.txt`. For example:
+
+```powershell
+.venv\Scripts\python.exe scripts\export_spreadsheet.py 2026-09-04-cissbury-2026-09-04.zip `
+  -o cissbury_survey_2026_09_04.zip --name cissbury_survey_2026_09_04 `
+  --include 2026-09-04-cissbury-2026-09-04.html
+```
+
 ## Architecture
 
 ```

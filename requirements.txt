@@ -1,5 +1,13 @@
-# For the pure-core .venv (see CLAUDE.md / README.md "Development setup"). Only
-# scripts/export_kml.py needs Pillow, for downscaling/recompressing photos before
-# embedding them in a .kmz - field_survey_import/core stays otherwise dependency-free,
-# and the QGIS plugin itself never imports Pillow.
+# For the pure-core .venv (see CLAUDE.md / README.md "Development setup"). The QGIS
+# plugin itself imports none of these - they're only for the standalone export
+# scripts, and field_survey_import/core imports each one lazily so it stays importable
+# without them.
+#
+# scripts/export_kml.py / export_html.py: photo downscaling before embedding.
 Pillow>=10
+# scripts/export_spreadsheet.py: the .xlsx writer.
+openpyxl>=3.1
+# scripts/export_spreadsheet.py: Windows has no system tz database, so the stdlib
+# zoneinfo needs this package or ZoneInfo("Europe/London") raises
+# ZoneInfoNotFoundError. Harmless (unused) on Linux/macOS.
+tzdata
