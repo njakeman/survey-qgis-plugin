@@ -152,7 +152,7 @@ Takes the same photo-optimization flags as the KMZ export (`--max-photo-dimensio
 ### Sharing a session as a spreadsheet + photos bundle
 
 ```powershell
-.venv\Scripts\python.exe scripts\export_spreadsheet.py path	o\export.zip
+.venv\Scripts\python.exe scripts\export_spreadsheet.py path\to\export.zip
 ```
 
 For recipients who just want the photos and a spreadsheet, no map at all. Writes one zip holding
